@@ -9,7 +9,8 @@ repo.
       Under 200 lines.
 - [ ] Copy `templates/claude/settings.json` to `.claude/settings.json`: `deny` for `.env` and secrets, `ask` for
       `git push`.
-- [ ] Add `CLAUDE.local.md` and `.claude/settings.local.json` to `.gitignore`.
+- [ ] Add `CLAUDE.local.md` and `.claude/settings.local.json` to `.gitignore`; copy `templates/claude/.gitignore` to
+      `.claude/.gitignore` (session worktrees and the per-worktree ports file stay local).
 - [ ] Install the plugin (chapter 16 §0) and declare it in the project's `.claude/settings.json`; or, without the
       plugin, copy `agents/` to `.claude/agents/` and `skills/` to `.claude/skills/`. Fastest:
       `/swarm:adopt 0`.
@@ -23,7 +24,9 @@ repo.
 
 - [ ] A `verify` script (start from `reference/scripts/verify.ts`; see `reference/README.md`): lint, types,
       tests with coverage; `--quick` on changed files; summary + tail; logs on disk; process groups with timeouts.
-- [ ] CI (`templates/github/workflows/ci.yml`) that calls the same commands, without secrets.
+- [ ] CI (`templates/github/workflows/ci.yml`) that calls the same commands, without secrets, plus documented extra
+      jobs where they apply (CI ⊇ verify: backend parity, image without secrets, backup/restore roundtrip).
+- [ ] Domain contract validators for the project's own data files, as a `verify` step.
 - [ ] Coverage floor just below what is measured, in `vitest.config.ts`; `allowOnly: false` in CI.
 - [ ] `docs/quality.md` from `templates/docs/quality.md`: types, suppressions with a reason, tests, flakiness.
 - [ ] The `verify` skill (`skills/verify/`).

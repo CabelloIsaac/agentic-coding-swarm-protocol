@@ -17,6 +17,7 @@ environment variables. Earlier reports went to a git-ignored folder, so there wa
 3. **Format, docs and process**, including the development harness itself (hooks, skills, scripts).
 4. **Scalability.**
 5. **Security.**
+6. **Protocol conformance** (optional): the conformance checks of `INTEGRATION.md` §6, read-only.
 
 ## The deterministic part: `pnpm audit:repo [--write] [--deps] [--json]`
 

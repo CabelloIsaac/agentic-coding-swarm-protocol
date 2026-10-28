@@ -99,9 +99,15 @@ Ignoring code blocks, for `docs/**/*.md`, `CLAUDE.md`, `README.md` and the index
 - every function cited as `name()` exists in the code (with a stop list of generic names);
 - every core module, every external integration, every event-log type, every package, every CLI command, every
   extension guide and every numbered ADR appears in its index;
-- every `INV-xx` tested in the architecture test appears in the invariants table.
+- invariants in **both directions**: every `INV-xx` tested appears in the invariants table, and every row of the
+  table has a test (or a stated reason, in a list that only shrinks, why another mechanism enforces it);
+- one numbering: prose and tests never cite an invariant id with different padding (`INV-1` or `INV-001` for
+  `INV-01`). In the reference project the agent memory file listed the invariants as a plain 1–11 list while the
+  table used `INV-xx`; architecture docs and more than 20 ADRs then cited `INV-5` meaning item 5 of the short list,
+  which is a different invariant from `INV-05`. A periodic audit caught it. Number the short list with the same ids.
 
-Result: documentation cannot fall behind without the suite saying so.
+Result: documentation cannot fall behind without the suite saying so. One-directional checks only catch half of the
+drift: a table row whose test was deleted looks exactly like a protected invariant.
 
 ## Test quality, not just quantity
 

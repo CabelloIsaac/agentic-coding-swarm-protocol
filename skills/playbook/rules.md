@@ -14,6 +14,7 @@ One page. If this is all you read, you will work well. Commands come from `swarm
 6. **Integrate only with `land`.** On conflict: `git rebase <integration branch>` on your branch, resolve, repeat.
    Never `merge`, `push`, `--force` or `--no-verify` by hand on the integration branch. (`land` skill)
 7. **Documentation ships in the same change.** New contract, invariant or formula: a draft ADR. (`new-adr` skill)
+   A new piece of a known kind follows its guide in `docs/extending/`; a new kind gets its guide. (`extend` skill)
 8. **No secrets and no real spend** from a worktree; tests run without network or keys.
 9. **What a command knows, ask the command** (types, lint, tests, metrics); do not reason about it.
 10. **Cheap context:** symbols and line ranges before whole files; trim output to the tail; independent calls in
@@ -24,3 +25,5 @@ One page. If this is all you read, you will work well. Commands come from `swarm
 12. **After a non-trivial change, an independent review** by the `reviewer` agent; on sensitive paths also
     `security-reviewer`. (`review` skill)
 13. **If a rule stops you, do not work around it:** propose the change (OpenSpec change + ADR).
+14. **No behavior change without a spec-driven change**, and no archive with failing validation or unchecked tasks
+    not marked "outside the repo". (`change` skill)

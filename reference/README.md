@@ -66,8 +66,11 @@ architecture and docs tests keep their own rules tables at the top of each file.
 
 **Full tier** (`verify`): cheap steps in parallel, test steps serially.
 
-1. lint · 2. typecheck (root and each app with its own tsconfig) · 3. contract validators · 4. spec validation ·
+1. lint · 2. typecheck (root and each app with its own tsconfig) · 3. domain contract validators (the `validators`
+step in `verify.full`: registries, tenant configs, fixtures against their schemas) · 4. spec validation ·
 5. tests with coverage at 50 % of cores (`--maxWorkers=50%`), including end-to-end runs.
+
+CI runs these same steps plus documented extra jobs (CI ⊇ verify), never fewer.
 
 **Quick tier** (`verify --quick`): built from the changed files, which are the union of
 `git diff --name-only <integration>...HEAD`, `git diff --name-only HEAD` and `git ls-files --others --exclude-standard`.
@@ -112,11 +115,14 @@ Flags: `--squash "<message>"`, `--no-push`. Retries: 3.
       `land` never resolves conflicts.
    2. If the rebase changed the lockfile blob, reinstall dependencies.
    3. Number draft ADRs and regenerate the ADR index; commit if anything changed.
-   4. Run the full `verify`. On failure: "integration branch untouched".
-   5. If the integration branch moved meanwhile, loop again.
-   6. Fast-forward: in the worktree that has the integration branch checked out, restore generated files and run
-      `git merge --ff-only <branch>`, so the ref and the working tree move together. If no worktree has it checked
-      out, `git update-ref` with the old value as a compare-and-swap.
+   4. Record `verified = git rev-parse HEAD`, then run the full `verify`. On failure: "integration branch untouched".
+   5. Require `HEAD == verified` and a clean tree (generated files restored first). Otherwise abort: something wrote
+      to the branch while verify ran (typically a Stop-hook `wip:` commit) and its tip is not what was verified.
+   6. If the integration branch moved meanwhile, loop again.
+   7. Fast-forward **to the verified SHA, never to the branch name**: in the worktree that has the integration branch
+      checked out, restore generated files and run `git merge --ff-only <verified>`, so the ref and the working tree
+      move together. If no worktree has it checked out, `git update-ref refs/heads/<integration> <verified> <old>` as
+      a compare-and-swap.
 5. **Publish** inside the lock: `git push <remote> refs/heads/<integration>:refs/heads/<integration>`. On failure,
    keep the local advance, print the manual command and exit 1.
 6. **Clean up:** run `wt gc`. A gc failure does not undo the land.
@@ -132,7 +138,7 @@ branch and open a PR with auto-merge; the merge queue runs the full gate and num
 | Subcommand | Behaviour |
 |---|---|
 | `setup` (SessionStart hook) | In the main checkout: remind that work happens in worktrees, run `gc` and `reap` under the land lock, print memory, divergence and stale-audit warnings. In a worktree: install deps if `node_modules` is older than the lockfile (skip under critical memory pressure), assign deterministic ports (`portBase + hash(name) % portRange * 2`) into `.claude/worktree.env`, warn about `.env`, reap orphans, warn about too many or too large dev servers. Errors exit 0: a session hook never blocks a session. |
-| `wip` (Stop hook) | If the tree is dirty, not in the main checkout and no rebase/merge/cherry-pick is in progress: `git add -A` and `git commit --no-verify -m "wip: <ISO>"`, amending if the tip is already this branch's `wip:`. At most one rolling wip commit. |
+| `wip` (Stop hook) | If the tree is dirty, not in the main checkout, no rebase/merge/cherry-pick is in progress and no live `land` holds the lock for this branch: `git add -A` and `git commit --no-verify -m "wip: <ISO>"`, amending if the tip is already this branch's `wip:`. At most one rolling wip commit. During a land of its own branch it does nothing: land integrates exactly the SHA it verified and would abort on a moved tip. |
 | `commit "<msg>"` | Absorb a trailing `wip:` (`reset --soft HEAD~1`), stage everything, commit. |
 | `status [--all]` | Per worktree: branch, ahead/behind, dirty count, wip count, integrated or not, last commit age, processes and RSS. `--all` adds remote branches with unintegrated work. |
 | `gc [--dry-run]` | Remove worktrees that are integrated, clean (except generated files) and have no live session. Stop their processes first (SIGTERM, SIGKILL after 5 s), never an agent process. |
@@ -201,9 +207,13 @@ shrink. The file header says: do not fix a failure by adding an exception withou
 
 ## Docs test
 
-Ignoring fenced code: relative links resolve; backticked repo paths exist; `functionName()` mentions exist in the
-code (with a stop-list of generic names); every source module, CLI command, extension guide and numbered ADR appears
-in its index; every tested invariant ID appears in the invariant table.
+Rules table on top (folders, indexes, invariant prefix and padding), generic mechanisms below. Ignoring fenced code:
+relative links resolve; backticked repo paths exist; `functionName()` mentions exist in the code (with a stop-list of
+generic names). Structure, checked against its index: every source module and every package or app is named in the
+architecture docs; every CLI command appears in the README; every extension guide is linked from the docs index;
+every ADR file is listed in the ADR index. Invariants, in both directions: every id in the table has a test (or a
+stated reason in a `notTested` list that only shrinks) and every id a test cites has a row. Numbering: prose and
+tests must not cite invariant ids in a different numbering (`INV-1` or `INV-001` when the table says `INV-01`).
 
 ## `pre-push` hook
 

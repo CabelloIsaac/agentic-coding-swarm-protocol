@@ -26,6 +26,12 @@ pnpm wt:commit "<message>" # absorbs the wip and makes the real commit (or a nor
 pnpm land                  # rebase → number ADRs → full verify → ff of main → push → gc
 ```
 
+Two settings make `claude -w` behave: `"worktree": { "baseRef": "head" }` in the versioned
+`.claude/settings.json`, so new worktrees branch from the main checkout's current `HEAD` (the local integration
+branch, which `land` keeps current) instead of a remote ref that may lag behind; and a `.claude/.gitignore` with
+`worktrees/` and `worktree.env`, so session folders and per-worktree ports never get committed (templates in
+`templates/claude/`).
+
 The worktree stays in place after the land. The next `land` or `wt:setup` deletes it once it is integrated, clean
 and has no live session. Nothing with unintegrated work is ever deleted.
 
@@ -37,7 +43,8 @@ Its output enters the session's context, so what it prints is written as warning
   `reap`, and warns about memory, divergence from the remote and an overdue audit.
 - **In a worktree:** installs dependencies if `node_modules` is older than the lockfile (skipped when memory is
   critical); assigns **deterministic ports** from the worktree name (`3200 + hash % 400 * 2`) and writes them to
-  `.claude/worktree.env`; warns if a `.env` exists (land will refuse); collects orphaned processes; warns if more
+  `.claude/worktree.env` as `export <PREFIX><SERVICE>_PORT=<n>` lines (dev scripts `source` it, so parallel
+  sessions never fight over port 3000); warns if a `.env` exists (land will refuse); collects orphaned processes; warns if more
   than 3 dev servers are running or one exceeds 3 GB.
 - **Memory warnings** when: pressure is `warn`/`critical`, swap > 75%, more than 10 integrated worktrees remain
   undeleted, or system indexing processes exceed 4 GB. It lists the top three consumers and what to do.
@@ -46,7 +53,8 @@ Its output enters the session's context, so what it prints is written as warning
 
 ## What the `Stop` hook does (`wt:wip`)
 
-If the tree is dirty, no rebase/merge is in progress and you are not in the main checkout: `git add -A` and commit
+If the tree is dirty, no rebase/merge is in progress, you are not in the main checkout and no `land` of this
+branch is running (land integrates exactly the SHA it verified, so a commit during verify would only make it abort): `git add -A` and commit
 `wip: <date> (Stop hook; pnpm wt:commit absorbs it)` with `--no-verify`. If the tip is already a `wip:` on this
 branch, it uses `--amend`: there is at most **one** rolling wip commit. Nothing is lost if the session dies, and
 `land` refuses to integrate a stray `wip:` (use `wt:commit` or `land --squash "<message>"`).
@@ -77,7 +85,8 @@ commits) and nothing raised an alarm. Decision:
 - `land` runs `fetch` first and **aborts if `origin/main` has foreign commits**; after the fast-forward, it
   publishes. `--no-push` integrates offline.
 - A versioned `pre-push` hook rejects pushes to `main` unless the clone has `git config <project>.publisher true`
-  (local, set by a human). `--no-verify` is the deliberate escape hatch.
+  (local, set by a human). `git push --no-verify` is the documented, deliberate escape hatch for a human who knows
+  why (the hook's message says so); agents never use it.
 - **Nothing is deleted without an archive:** `wt:archive <branch>` creates and publishes the tag
   `archive/<date>-<branch>`, verifies with `ls-remote` that it points to the same commit, and only then deletes the
   worktree, the local branch and the remote branch.

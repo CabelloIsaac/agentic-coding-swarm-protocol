@@ -171,7 +171,9 @@ export const config: Config = {
       { name: 'typecheck', cmd: 'pnpm -s typecheck' },
       { name: 'tsc app-a', cmd: 'npx tsc --noEmit -p apps/app-a' },
       { name: 'tsc app-b', cmd: 'npx tsc --noEmit -p apps/app-b' },
-      { name: 'registry:validate', cmd: 'pnpm -s validate:registry' },
+      // Domain contract validators, a first-class category of the gate: the project's own data (registries, tenant
+      // configs, fixtures) checked against its schemas and cross-references. Specs (openspec) are one more validator.
+      { name: 'validators', cmd: 'pnpm -s validate:registry && pnpm -s validate:config' },
       // A MODIFIED delta that omits scenarios breaks `openspec archive` once nobody remembers the change
       { name: 'openspec', cmd: 'pnpm -s exec openspec validate --all --no-interactive' },
       { name: 'tests + coverage', cmd: 'pnpm -s test:coverage --maxWorkers=50%', serial: true },
@@ -184,7 +186,7 @@ export const config: Config = {
       { name: 'structural rules', cmd: 'pnpm -s test:arch', serial: true },
       { name: 'tsc app-a', cmd: 'npx tsc --noEmit -p apps/app-a', whenChanged: /^apps\/app-a\// },
       { name: 'tsc app-b', cmd: 'npx tsc --noEmit -p apps/app-b', whenChanged: /^apps\/app-b\// },
-      { name: 'registry:validate', cmd: 'pnpm -s validate:registry', whenChanged: /^registry\// },
+      { name: 'validators', cmd: 'pnpm -s validate:registry && pnpm -s validate:config', whenChanged: /^(registry|config)\// },
       { name: 'openspec', cmd: 'pnpm -s exec openspec validate --all --no-interactive', whenChanged: /^openspec\// },
       { name: 'affected tests', cmd: 'pnpm -s exec vitest run --changed {{integrationBranch}} --passWithNoTests', serial: true },
     ],

@@ -34,14 +34,13 @@ if v is not None:
 
 case "$mode" in
   session-start | stop)
+    # Only swarm.json drives these hooks: a project that wires its own SessionStart/Stop hooks in
+    # .claude/settings.json (and has no swarm.json) must not get them run twice.
     key=.hooks.sessionStart
-    legacy=setup
-    if [ "$mode" = stop ]; then key=.hooks.stop; legacy=wip; fi
+    if [ "$mode" = stop ]; then key=.hooks.stop; fi
     if [ -f "$manifest" ]; then
       cmd=$(json "$key" "$manifest")
       [ -n "$cmd" ] && (cd "$root" && sh -c "$cmd")
-    elif [ -f "$root/scripts/dev/wt.ts" ]; then
-      (cd "$root" && node scripts/dev/wt.ts "$legacy")
     fi
     ;;
   gate)

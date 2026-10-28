@@ -20,6 +20,8 @@ contract behind that file is [INTEGRATION.md](INTEGRATION.md).
 | Starting a session, or cleaning up worktrees | [skills/worktree/SKILL.md](skills/worktree/SKILL.md) | — |
 | Fixing a bug or adding behavior | [skills/tdd/SKILL.md](skills/tdd/SKILL.md) | — |
 | Saying a change is done, or a verify step is red | [skills/verify/SKILL.md](skills/verify/SKILL.md) | — |
+| Proposing, implementing, verifying or archiving a behavior change | [skills/change/SKILL.md](skills/change/SKILL.md) and the detail file of the current phase | the other phases' files |
+| Adding a new integration, tool, event log, UI section or other kind of piece | [skills/extend/SKILL.md](skills/extend/SKILL.md) and the repo's guide in `docs/extending/` | — |
 | Integrating a finished branch | [skills/land/SKILL.md](skills/land/SKILL.md) | — |
 | Recording a contract, invariant or formula decision | [skills/new-adr/SKILL.md](skills/new-adr/SKILL.md) | — |
 | Getting a finished branch reviewed | [skills/review/SKILL.md](skills/review/SKILL.md), which dispatches the agents below | — |

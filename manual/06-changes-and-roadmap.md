@@ -17,7 +17,8 @@ openspec archive <name> -y             → merges the deltas into openspec/specs
 In Claude Code, each step is a skill (`openspec-new-change`, `openspec-continue-change`, `openspec-apply-change`,
 `openspec-verify-change`, `openspec-archive-change`) or a `/opsx:*` command. The skills follow a fixed format:
 one-line purpose, **Input**, numbered **Steps** with the exact commands and "STOP and wait for the user",
-**Output**, **Guardrails**.
+**Output**, **Guardrails**. The protocol ships the whole lifecycle as one skill, `change`
+(`skills/change/SKILL.md`), with one detail file per phase and the red flags from the reference project's audits.
 
 ## The artifacts
 

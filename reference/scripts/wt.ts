@@ -29,6 +29,7 @@ import {
   isAncestor,
   isLinkedWorktree,
   isWip,
+  landRunningFor,
   lockPid,
   mainCheckout,
   operationInProgress,
@@ -190,9 +191,13 @@ async function reapNote(cwd: string, opts: SetupOptions, notes: string[]): Promi
   if (warning) notes.push(warning);
 }
 
-/** Rolling wip commit: if the tip is already wip it is amended, so the hook does not fill the branch with commits. */
+/**
+ * Rolling wip commit: if the tip is already wip it is amended, so the hook does not fill the branch with commits. It
+ * does nothing while a live land holds the lock for this branch: land integrates exactly the SHA it verified.
+ */
 export function wip(cwd: string): string | undefined {
-  if (!isLinkedWorktree(cwd) || !currentBranch(cwd) || operationInProgress(cwd)) return undefined;
+  const branch = currentBranch(cwd);
+  if (!isLinkedWorktree(cwd) || !branch || operationInProgress(cwd) || landRunningFor(cwd, branch)) return undefined;
   const root = toplevel(cwd);
   if (dirtyPaths(root).length === 0) return undefined;
   git(root, 'add', '-A');

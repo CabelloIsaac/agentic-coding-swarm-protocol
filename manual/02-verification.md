@@ -77,12 +77,24 @@ Protocol:
    never in parallel.
 4. Before all of that: `pnpm wt:gc` and `pnpm wt:reap`.
 
-## CI is the mirror
+## CI is the mirror, and a superset: CI ⊇ verify
 
-`.github/workflows/ci.yml` runs the same steps as the full `verify`, without secrets and in mock mode, plus: a
-Docker image that is built and checked to **contain no `.env`**; a job with Postgres and object storage that
-migrates a clean database, runs the contract suites and checks that an end-to-end demo run on files and on Postgres
-produces the same record count and hash per event log. It cancels earlier runs on the same branch.
+`.github/workflows/ci.yml` runs the same steps as the full `verify` (ideally by calling it), without secrets and in
+mock mode. It cancels earlier runs on the same branch. **CI may run more than verify, never less:** every extra job
+exists because it needs something a worktree session should not need to iterate (a service, Docker, minutes), and
+its comment says so. In the reference project those extra jobs are:
+
+- **Backend parity:** a job with a database and object storage as service containers that migrates a clean
+  database, runs the storage contract suites against the real backend, and checks that the same deterministic
+  end-to-end run on the file backend and on the database produces the same record count and hash per event log.
+- **Image without secrets:** the deployable image is built and checked to **contain no `.env`**.
+- **Backup and restore roundtrip:** seed a demo dataset, back it up, restore into an empty temp location and run
+  the data validators on the result. A backup nobody has restored is not a backup.
+
+Two rules keep the superset honest: no step in the gate path uses `continue-on-error` (a gate that cannot fail is
+not a gate; only the download of an optional tool may tolerate failure, and the tests it enables must then skip
+visibly), and every extra job is a required check on the integration branch, or it is advice. The template ships
+these jobs commented out.
 
 **If a gate needs credentials to pass, the test is badly designed.**
 
@@ -90,7 +102,7 @@ produces the same record count and hash per event log. It cancels earlier runs o
 
 - A single `verify` script with the CI steps, `--quick` driven by changed files, process groups with timeouts,
   summary plus tail, logs on disk.
-- CI that calls the same commands (it does not reimplement the list).
+- CI that calls the same commands (it does not reimplement the list), plus documented extra jobs (CI ⊇ verify).
 - An allowlist of **one** infrastructure failure with an exact signature, and nothing else.
 - One line in `CLAUDE.md` with both commands and why quick is not enough.
 

@@ -1,5 +1,5 @@
 {
-  "$comment": "Template for .claude/settings.json (versioned). Adjust paths and commands. deny rules apply to everyone; allow rules wait for each person's trust dialog.",
+  "$comment": "Template for .claude/settings.json (versioned). Adjust paths and commands. deny rules apply to everyone; allow rules wait for each person's trust dialog. worktree.baseRef head: claude -w branches from the main checkout's current HEAD, not a remote ref that may lag. Pair with templates/claude/.gitignore.",
   "worktree": { "baseRef": "head" },
   "permissions": {
     "allow": [

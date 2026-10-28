@@ -21,11 +21,14 @@ serially, always green, always fast-forward. Nobody merges by hand or resolves c
    - **Reinstall dependencies** if the rebase changed the lockfile blob.
    - **Number draft ADRs** (`draft-<slug>` → `00NN-<slug>`), rewriting references across the repo, and regenerate
      the index; commit the result.
-   - **Full verification** (`verify`). On failure: "main was not touched."
+   - **Record the SHA** about to be verified (`verified = rev-parse HEAD`), then run the **full verification**
+     (`verify`). On failure: "main was not touched."
+   - **Check nothing moved:** `HEAD` must still be `verified` and the tree clean. Otherwise abort: the tip is no
+     longer what was verified.
    - If main moved during verification, go back to the start of the loop.
-   - **Advance:** in the worktree that has main checked out (the main checkout), restore framework-generated files
-     and run `merge --ff-only`. The ref and the working tree move together. If no worktree has main, use
-     `update-ref` with an old-value check.
+   - **Advance to the verified SHA:** in the worktree that has main checked out (the main checkout), restore
+     framework-generated files and run `merge --ff-only <verified>`. The ref and the working tree move together. If
+     no worktree has main, use `update-ref refs/heads/main <verified> <old>` (an old-value check).
 6. **Publish** (inside the lock): `push origin main:main`. If it fails, main stays advanced locally, the manual
    command is printed and the exit code is 1.
 7. **Cleanup:** `wt:gc`. A gc failure does not undo the land.
@@ -46,9 +49,22 @@ Final message: `✓ N commit(s) from <branch> on main (<sha>, published to origi
 | Number ADRs at integration | number collisions between branches (one forced renaming 10 files) |
 | Full verification inside the lock | integrating red; two branches green separately but red together |
 | Re-verify if main moved | a verification that was valid for a base that no longer exists |
+| Fast-forward to the verified SHA, not the branch name | a commit created while verify ran (a Stop-hook `wip:`) landing unverified |
+| Stop hook idle while its branch lands | that same commit being created in the first place |
 | ff-only | integration merges, non-linear history, manual "fixes" |
 | Reject `.env` | two worktrees with credentials publishing or purchasing twice |
 | JSONL log | measuring the workflow (p50 land time, % without conflict) and having a rollback criterion |
+
+### Incident: fast-forwarding a name instead of the verified SHA
+
+The first version of `land` verified the branch and then ran `merge --ff-only <branch>`. Verification takes 5–10
+minutes; in that window the session's Stop hook fired, found the tree dirty and created a `wip:` commit. The
+fast-forward then moved main to the new tip, so a commit nobody had verified (and with a `wip:` subject that `land`
+otherwise refuses) was integrated and published. It happened twice before it was caught by a periodic audit. The fix
+has two halves, and both are needed: `land` records the SHA before verifying, refuses to advance if the tip moved or
+the tree changed, and fast-forwards that exact SHA; and the Stop hook does nothing while a live land lock belongs to
+its branch. General lesson: **between a check and the action it licenses, pin the object by identity (a hash), never
+by a name that can move.**
 
 ## Conflicts
 

@@ -14,18 +14,21 @@ in skills.
 ## Parallel work (ADR-0001)
 
 - One session = one worktree = one branch: `claude -w <task>`. Never edit or commit in the main checkout.
-- Commit with `git commit` or `pnpm wt:commit "<message>"` (it absorbs the `wip:` commit left by the `Stop` hook).
+- Commit with `pnpm wt:commit "<message>"`: it absorbs the `wip:` commit left by the `Stop` hook. A plain
+  `git commit` on top of a `wip:` buries it, and `land` then refuses the branch.
 - Integrate with `pnpm land`. On conflict, resolve it yourself on your branch with `git rebase main` and repeat.
 - Worktrees have no `.env`: real spend happens only from the main checkout.
 - At most <N> sessions verifying at once; stop the dev server when you are done looking at it.
 
 ## Invariants that do not break (tests in `<path>/architecture.test.ts`)
 
-1. <Only `src/storage` accesses storage.>
-2. <Event logs are append-only and every record carries `schema_version`.>
-3. <Every external effect is idempotent.>
-4. <Completed = verified: without an evaluation, `skipped`.>
-5. <Every spend is checked against the budget before it happens.>
+Cite them by their table id, never by position (the docs test rejects any other numbering).
+
+- INV-01 <Only `src/storage` accesses storage.>
+- INV-02 <Event logs are append-only and every record carries `schema_version`.>
+- INV-03 <Every external effect is idempotent.>
+- INV-04 <Completed = verified: without an evaluation, `skipped`.>
+- INV-05 <Every spend is checked against the budget before it happens.>
 
 ## Documentation is part of the change
 

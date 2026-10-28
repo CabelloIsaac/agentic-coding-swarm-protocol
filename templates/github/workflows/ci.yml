@@ -1,5 +1,7 @@
-# CI: the same steps as `pnpm verify`, without secrets, in mock mode.
+# CI: the same steps as `pnpm verify`, without secrets, in mock mode, plus optional extra jobs (CI ⊇ verify).
 # If a gate needs credentials to pass, the test is badly designed.
+# Every job beyond `quality` must say, in its comment, why it is not in local verify (needs a service, Docker, minutes).
+# No step in the gate path may use `continue-on-error`: a gate that cannot fail is not a gate.
 # Pin every action to a full commit SHA in your repo (tags are mutable); pnpm comes from corepack, not a third-party action.
 name: ci
 on:
@@ -24,8 +26,12 @@ jobs:
         with:
           node-version: 24
       - run: corepack enable && pnpm install --frozen-lockfile
+      # Prefer `pnpm verify` as one step; if you list its steps instead, keep them identical to verify.full
       - run: pnpm lint
       - run: pnpm typecheck
+      # Domain contract validators: the project's own data files checked against their schemas
+      - run: pnpm validate:registry
+      - run: pnpm validate:config
       - run: pnpm exec openspec validate --all --no-interactive
       - run: pnpm test:coverage --maxWorkers=1
       - name: Memory diagnostics on failure
@@ -38,11 +44,80 @@ jobs:
         with:
           name: coverage
           path: coverage/
-  docker-image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker build -t app:ci .
-      - name: The image contains no secrets
-        run: docker run --rm --entrypoint test app:ci ! -f /app/.env
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # Optional extra jobs. Uncomment the ones that apply. Each runs something local verify cannot run cheaply; make it
+  # a required check on the integration branch (branch protection), or it is advice, not a gate.
+  # ---------------------------------------------------------------------------------------------------------------
+
+  # Backend parity: if the app has two storage backends (files and a database, an in-memory fake and the real one),
+  # the same contract suites run against the real backend on a service container, migrations are applied from zero,
+  # and a deterministic end-to-end run is compared across backends (record count and hash per collection).
+  # Not in local verify: it needs a database server, and agents in worktrees should not need one to iterate.
+  # backend-parity:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   services:
+  #     db:
+  #       image: postgres:16
+  #       env:
+  #         POSTGRES_PASSWORD: ci
+  #         POSTGRES_DB: app_test
+  #       ports:
+  #         - 5432:5432
+  #       options: >-
+  #         --health-cmd "pg_isready -U postgres -d app_test"
+  #         --health-interval 5s
+  #         --health-timeout 5s
+  #         --health-retries 12
+  #   env:
+  #     TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/app_test
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         persist-credentials: false
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 24
+  #     - run: corepack enable && pnpm install --frozen-lockfile
+  #     - name: Migrations from zero, then status must be up to date
+  #       run: pnpm db:migrate && pnpm db:status
+  #     - name: Contract suites against the real backend
+  #       run: pnpm test:contract
+  #     - name: Same end-to-end run on both backends, same fingerprints
+  #       run: pnpm storage:compare
+
+  # Image without secrets: the deployable image builds and carries no `.env` or credentials.
+  # Not in local verify: it needs Docker and minutes of build time; a broken Dockerfile is rare but must not reach main.
+  # image:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         persist-credentials: false
+  #     - run: docker build --build-arg BUILD_SHA=${{ github.sha }} -t app:ci .
+  #     - name: The image contains no secrets
+  #       run: docker run --rm --entrypoint test app:ci ! -f /app/.env
+
+  # Backup and restore roundtrip: seed a deterministic dataset, back it up, restore into an empty temp location and
+  # run the data validators on the result. A backup nobody has restored is not a backup.
+  # Not in local verify: it is slow and exercises the same code paths on every run; once per push is enough.
+  # Script sketch (scripts/backup-roundtrip.sh, `set -euo pipefail`, everything in mock mode and on copies):
+  #   work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+  #   root="$(pnpm -s app demo:run --json | jq -r .root)"
+  #   archive="$(APP_ROOT="$root" pnpm -s app backup:create --out "$work/b" --json | jq -r .archive)"
+  #   pnpm -s app backup:restore "$archive" --into "$work/restored"
+  #   APP_ROOT="$work/restored" pnpm -s app validate
+  # backup-roundtrip:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 20
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         persist-credentials: false
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 24
+  #     - run: corepack enable && pnpm install --frozen-lockfile
+  #     - run: bash scripts/backup-roundtrip.sh

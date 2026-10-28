@@ -125,6 +125,15 @@ export function readLandLock(cwd: string): { branch?: string; pid?: number } | u
   }
 }
 
+/**
+ * Is a live `land` integrating this branch right now? The Stop hook must not commit then: land fast-forwards only the
+ * SHA it verified and aborts if the tip moves, so a `wip:` commit during verify would only make it fail.
+ */
+export function landRunningFor(cwd: string, branch: string): boolean {
+  const lock = readLandLock(cwd);
+  return lock?.branch === branch && lock.pid !== undefined && pidAlive(lock.pid);
+}
+
 /** `EPERM` is a live process of another user; only `ESRCH` says it does not exist. */
 export function pidAlive(pid: number): boolean {
   try {

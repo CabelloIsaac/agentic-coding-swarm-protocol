@@ -16,6 +16,7 @@ incident.
 | **Resolving the conflict "wherever"** | someone who did not cause the conflict resolves it without context and breaks something | `land` aborts and lists; resolve on the branch that caused it, with `rebase` |
 | ★ **Deleting branches or worktrees while "cleaning up"** | unintegrated work lost | nothing is deleted without a published and verified `archive/*` tag; `gc` removes only what is integrated, clean and has no live session |
 | ★ **Unabsorbed wip** | `wip:` commits integrated, unreadable history | `land` refuses to integrate `wip:`; `wt:commit` absorbs them |
+| ★ **Fast-forwarding a name instead of the verified SHA** | a commit created while verify ran (a Stop-hook `wip:`) lands unverified; it happened twice | record `rev-parse HEAD` before verify, require it unchanged and a clean tree, `merge --ff-only <sha>`; the Stop hook stays idle while its branch lands |
 
 ## Verification and tests
 

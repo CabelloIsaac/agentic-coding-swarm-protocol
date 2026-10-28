@@ -1,6 +1,7 @@
 /**
  * Documentation is part of the architecture: this test fails if the docs cite things that no longer exist, or if new
- * structure (module, integration, ledger kind, command, invariant, guide, ADR) appears undocumented.
+ * structure (module, package, integration, ledger kind, command, invariant, guide, ADR) appears undocumented. Checks run
+ * in both directions where it matters: the invariant table and the tests must name the same ids.
  * How to fix a failure: update the document named in the message; do not relax the test.
  *
  * The concrete folders and indexes are in the table below; the checks are generic.
@@ -33,10 +34,24 @@ const MUST_BE_IN_ARCH = {
   /** Names of registered integrations, ledger kinds, etc. — return them from the code or list them here. */
   names: [] as string[],
 };
-/** Every command found by this regex in these files must appear in the README. */
+/** Every command found by this regex in these folders must appear in the README. */
 const COMMANDS = { files: ['apps/cli/src/commands'], regex: /\.command\('([a-z:-]+)/g, mustAppearIn: 'README.md' };
-/** Invariant table: rows look like `| INV-01 |`; every INV id cited in the architecture test must have a row. */
-const INVARIANTS = { testFile: 'test/architecture.test.ts', minDocumented: 1 };
+/** Folders whose sub-folders with a `package.json` are packages or apps: each must be named in the architecture docs. */
+const PACKAGE_ROOTS = ['packages', 'apps'];
+/**
+ * Invariants, checked in both directions: every id in the table (rows like `| INV-01 |`) has a test, and every id a
+ * test cites has a row. `testFiles` are the suites searched for ids (the architecture test first); `notTested` lists
+ * ids enforced some other way (review, a hook, the type system), each with its reason. `digits` is the canonical
+ * zero padding: prose that cites `INV-1` or `INV-001` is a different numbering and fails.
+ */
+const INVARIANTS = {
+  prefix: 'INV',
+  digits: 2,
+  architectureTest: 'test/architecture.test.ts',
+  testFiles: ['test/architecture.test.ts'],
+  notTested: {} as Record<string, string>,
+  minDocumented: 1,
+};
 /** Index files that must link every file of a folder. */
 const INDEXES = [
   { index: 'docs/README.md', folder: 'docs/extending', pattern: /\.md$/, linkPrefix: 'extending/' },
@@ -45,6 +60,14 @@ const INDEXES = [
 
 // ───────────────────────────── MECHANISMS ─────────────────────────────
 const read = (rel: string) => readFileSync(join(ROOT, rel), 'utf8');
+const dirs = (rel: string) => (existsSync(join(ROOT, rel)) ? readdirSync(join(ROOT, rel)).filter((f) => statSync(join(ROOT, rel, f)).isDirectory()) : []);
+const INV_ID = new RegExp(`\\| (${INVARIANTS.prefix}-\\d{${INVARIANTS.digits}}) \\|`, 'g');
+/** Ids a suite cites, including the `INV-06/07` shorthand for one test covering two invariants. */
+const citedIds = (text: string) =>
+  [...text.matchAll(new RegExp(`${INVARIANTS.prefix}-(\\d{${INVARIANTS.digits}})(?:/(\\d{${INVARIANTS.digits}}))?(?!\\d)`, 'g'))].flatMap((m) => [
+    `${INVARIANTS.prefix}-${m[1]}`,
+    ...(m[2] ? [`${INVARIANTS.prefix}-${m[2]}`] : []),
+  ]);
 const mdFiles = (dir: string): string[] =>
   !existsSync(join(ROOT, dir))
     ? []
@@ -119,20 +142,49 @@ describe('docs: cover the real structure', () => {
 
   it('every CLI command appears in the README', () => {
     const readme = read(COMMANDS.mustAppearIn);
-    const commands = COMMANDS.files.flatMap((dir) => readdirSync(join(ROOT, dir)).flatMap((f) => [...read(`${dir}/${f}`).matchAll(COMMANDS.regex)].map((m) => m[1] ?? '')));
+    const commands = COMMANDS.files
+      .filter((dir) => existsSync(join(ROOT, dir)))
+      .flatMap((dir) => readdirSync(join(ROOT, dir)).flatMap((f) => [...read(`${dir}/${f}`).matchAll(COMMANDS.regex)].map((m) => m[1] ?? '')));
     expect(commands.filter((c) => !readme.includes(c))).toEqual([]);
   });
 
-  it('every INV-xx tested has a row in the invariant table', () => {
-    const documented = new Set([...ARCH.matchAll(/\| (INV-\d{2}) \|/g)].map((m) => m[1]));
-    const tested = new Set([...read(INVARIANTS.testFile).matchAll(/INV-(\d{2})(?:\/(\d{2}))?/g)].flatMap((m) => [`INV-${m[1]}`, ...(m[2] ? [`INV-${m[2]}`] : [])]));
+  it('every package or app is named in the architecture docs', () => {
+    const pkgs = PACKAGE_ROOTS.flatMap((root) =>
+      dirs(root)
+        .filter((d) => existsSync(join(ROOT, root, d, 'package.json')))
+        .map((d) => ({ path: `${root}/${d}`, name: (JSON.parse(read(`${root}/${d}/package.json`)) as { name?: string }).name ?? '' })),
+    );
+    expect(pkgs.filter((p) => !ARCH.includes(p.path) && !(p.name && ARCH.includes(p.name))).map((p) => p.path)).toEqual([]);
+  });
+
+  it('invariants: every tested id has a row in the table', () => {
+    const documented = new Set([...ARCH.matchAll(INV_ID)].map((m) => m[1]));
+    const tested = new Set(citedIds(read(INVARIANTS.architectureTest)));
     expect([...tested].filter((i) => !documented.has(i))).toEqual([]);
     expect(documented.size).toBeGreaterThanOrEqual(INVARIANTS.minDocumented);
   });
 
+  it('invariants: every id in the table has a test (or a stated reason it has none)', () => {
+    const documented = [...new Set([...ARCH.matchAll(INV_ID)].map((m) => m[1] ?? ''))];
+    const tested = new Set(INVARIANTS.testFiles.flatMap((f) => citedIds(read(f))));
+    expect(documented.filter((i) => !tested.has(i) && !INVARIANTS.notTested[i])).toEqual([]);
+    // A reason for an id that is tested, or that left the table, is stale: the exception list only shrinks
+    expect(Object.keys(INVARIANTS.notTested).filter((i) => tested.has(i) || !documented.includes(i))).toEqual([]);
+  });
+
+  it('invariant ids use one numbering everywhere (no unpadded or re-padded ids)', () => {
+    const canonical = new RegExp(`^${INVARIANTS.prefix}-\\d{${INVARIANTS.digits}}$`);
+    const cited = new RegExp(`\\b${INVARIANTS.prefix}-(\\d+)\\b`, 'g');
+    const wrong = [...DOCS, ...INVARIANTS.testFiles].flatMap((f) =>
+      [...prose(read(f)).matchAll(cited)].map((m) => m[0]).filter((id) => !canonical.test(id)).map((id) => `${f} → ${id}`),
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  // Covers the ADR index (every ADR file listed) and the docs index (every extension guide linked)
   it.each(INDEXES)('$index links every file of $folder', ({ index, folder, pattern, linkPrefix }) => {
     const text = read(index);
-    const files = readdirSync(join(ROOT, folder)).filter((f) => pattern.test(f));
+    const files = existsSync(join(ROOT, folder)) ? readdirSync(join(ROOT, folder)).filter((f) => pattern.test(f)) : [];
     expect(files.filter((f) => !text.includes(`${linkPrefix}${f}`))).toEqual([]);
   });
 });

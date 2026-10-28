@@ -12,7 +12,7 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
 ```json
 {
   "protocol": "swarm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "level": 2,
   "integrationBranch": "main",
   "commands": {
@@ -57,14 +57,19 @@ The names are free; the behaviour is the contract. Every guarantee below is some
 
 | Command | Must | Must never |
 |---|---|---|
-| `verify` | Run exactly what CI runs. Exit 0 if and only if every step is green. Print one line per step and the tail of each failure; keep full logs on disk and print their path. | Pass with a skipped, retried or "known flaky" step, unless the tolerance is a documented exact signature. |
+| `verify` | Run every step of CI's quality job (CI ⊇ verify: CI may add documented jobs that need services, Docker or minutes, never skip a verify step), including the domain contract validators. Exit 0 if and only if every step is green. Print one line per step and the tail of each failure; keep full logs on disk and print their path. | Pass with a skipped, retried or "known flaky" step, unless the tolerance is a documented exact signature. |
 | `verifyQuick` | Run the steps affected by the diff against the integration branch, plus the structural tests. Finish in seconds to a few minutes. | Be accepted as the gate that closes a task. |
 | `commit` | Absorb a pending `wip:` commit and commit everything with the given message. | Push. |
 | `status` | List worktrees and branches with unintegrated work, dirty state and age. | Change anything. |
-| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, run full `verify`, fast-forward, publish, log the attempt. On any failure leave the integration branch untouched and exit non-zero with the reason. | Resolve conflicts, merge histories, or force-push. |
+| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
 | `audit` | Run offline with no spend, print metrics, optionally store a snapshot for deltas. | Fix anything. |
 | `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
-| `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout or during a rebase or merge. |
+| `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout, during a rebase or merge, or while a `land` of its branch is running. |
+
+**Domain contract validators are a first-class category of the gate**, next to lint, types and tests: the
+project's own data (tool or plugin registries, tenant configuration, specs, fixtures) checked against its schemas
+and cross-references by dedicated commands that run inside `verify` and in CI. A registry that names an
+implementation that does not exist is as broken as code that does not compile.
 
 The reference implementation of every command is specified in [reference/README.md](reference/README.md), with code
 in `reference/scripts/`.
@@ -78,8 +83,9 @@ The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swa
 - **PreToolUse (Edit/Write)** warns, without blocking, when a file matching a quality-gate glob is edited: the
   defaults plus `gates` from `swarm.json`.
 
-In a repository without `swarm.json` the hooks do nothing (a legacy fallback still recognises
-`scripts/dev/wt.ts`), so installing the plugin globally is safe. They read JSON with `jq`, `node` or `python3`,
+In a repository without `swarm.json` the session hooks do nothing, so installing the plugin globally is safe, and a
+project that already wires its own SessionStart/Stop hooks in `.claude/settings.json` never gets them run twice. A
+project that adopts the manifest moves those commands into `hooks` and removes them from its settings. They read JSON with `jq`, `node` or `python3`,
 whichever exists first. The hook commands come from the project's own committed file, under the same trust as its
 `.claude/settings.json`: review changes to `swarm.json` like any other change to the build.
 
@@ -88,14 +94,14 @@ whichever exists first. The hook commands come from the project's own committed 
 The workflow tooling (`land`, `wt`, ADR numbering) only needs git and Node 24 and works as a dev tool in any stack;
 or port it from the specification. The gate itself uses the stack's native tools:
 
-| Stack | Lint | Types | Tests + coverage floor | Quick (affected only) | Architecture rules |
-|---|---|---|---|---|---|
-| TypeScript (pnpm) | Biome or ESLint | `tsc --noEmit` | Vitest with `coverage.thresholds` | `vitest run --changed <branch>` | import-graph test, dependency-cruiser |
-| Python (uv / Poetry) | `ruff check` | `mypy` or `pyright` | `pytest --cov --cov-fail-under=<N>` | `pytest --testmon`, or tests under changed paths | import-linter contracts |
-| Go | `golangci-lint run` | the compiler, `go vet` | `go test -race -coverprofile` + a coverage-floor check | `go test` on changed packages and their dependents | arch-go, or a test over `go list -deps` |
-| Rust | `cargo clippy -- -D warnings` | `cargo check` | `cargo llvm-cov --fail-under-lines <N>` | `cargo test -p <changed crates>` | module visibility, cargo-deny for dependencies |
-| JVM (Gradle) | Spotless or Checkstyle | the compiler | `gradle check` with JaCoCo violation rules | `:<module>:test` for changed modules | ArchUnit |
-| Anything | `make lint` | `make typecheck` | `make test` | `make test-changed` | a test in the project's own test runner |
+| Stack | Lint | Types | Domain contract validators | Tests + coverage floor | Quick (affected only) | Architecture rules |
+|---|---|---|---|---|---|---|
+| TypeScript (pnpm) | Biome or ESLint | `tsc --noEmit` | a CLI command per data family parsing with Zod (`validate:registry`, `validate:config`), `openspec validate --all` | Vitest with `coverage.thresholds` | `vitest run --changed <branch>` | import-graph test, dependency-cruiser |
+| Python (uv / Poetry) | `ruff check` | `mypy` or `pyright` | Pydantic or `check-jsonschema` over the data files | `pytest --cov --cov-fail-under=<N>` | `pytest --testmon`, or tests under changed paths | import-linter contracts |
+| Go | `golangci-lint run` | the compiler, `go vet` | a `cmd/validate` over the data files, or `cue vet` | `go test -race -coverprofile` + a coverage-floor check | `go test` on changed packages and their dependents | arch-go, or a test over `go list -deps` |
+| Rust | `cargo clippy -- -D warnings` | `cargo check` | a `validate` binary with serde + schema checks | `cargo llvm-cov --fail-under-lines <N>` | `cargo test -p <changed crates>` | module visibility, cargo-deny for dependencies |
+| JVM (Gradle) | Spotless or Checkstyle | the compiler | a Gradle task with a JSON Schema validator | `gradle check` with JaCoCo violation rules | `:<module>:test` for changed modules | ArchUnit |
+| Anything | `make lint` | `make typecheck` | `make validate` | `make test` | `make test-changed` | a test in the project's own test runner |
 
 Wrap the steps in one entry point (`make verify`, `just verify`, `tox -e verify`, a script) and put that in
 `commands.verify`. The docs test (links, cited paths, structure in its index) is stack-independent: a
@@ -132,14 +138,14 @@ list by hand.
 | L0.5 | Decision log | `docs/adr/` holds at least the adoption ADR. |
 | L1.1 | Full gate | `commands.verify` exits 0 on a clean checkout of the integration branch. |
 | L1.2 | Quick gate | `commands.verifyQuick` exits 0 and is faster than the full gate. |
-| L1.3 | CI parity | the CI workflow runs `commands.verify` or exactly its steps. |
+| L1.3 | CI parity (CI ⊇ verify) | CI runs `commands.verify` (or exactly its steps) plus any extra jobs, each documented with why it is not in local verify; no step in the gate path may use `continue-on-error`. |
 | L1.4 | Coverage floor | a threshold is configured and enforced by the test step. |
 | L1.5 | No secrets in CI | the quality job reads no secrets. |
 | L2.1 | Worktrees | the worktree directory is gitignored; the session start hook or §5 step 1 is documented. |
 | L2.2 | Session commands | `commands.commit`, `status` and `land` resolve to existing scripts. |
 | L2.3 | Protected integration | a `pre-push` publisher guard is installed (`git config core.hooksPath`) or branch protection is on. |
 | L2.4 | Invariants as tests | an architecture test exists and runs inside `verify`. |
-| L2.5 | Docs as tests | a docs test exists and runs inside `verify`. |
+| L2.5 | Docs as tests | a docs test runs inside `verify` and checks both directions: links, cited paths and functions exist; every module, package or app, CLI command, extension guide (docs index) and ADR (ADR index) is documented; every invariant id in the table has a test and every tested id is in the table; prose uses one invariant numbering (no `INV-1` for `INV-01`). |
 | L2.6 | Non-Claude agents | `AGENTS.md` exists and states the §5 session protocol, or points to `CLAUDE.md` which does. |
 | L3.1 | Roadmap | a roadmap file exists and its validator runs inside `verify`. |
 | L3.2 | Audit | `commands.audit` runs offline and exits 0. |
@@ -150,7 +156,7 @@ list by hand.
 Output format:
 
 ```text
-swarm check · level 1 · protocol 0.1.0
+swarm check · level 1 · protocol 0.2.0
 ✓ L0.1 Manifest            swarm.json ok (level 0)
 ✓ L0.2 Agent memory        CLAUDE.md 142 lines, names "make verify"
 ✗ L1.3 CI parity           .github/workflows/ci.yml runs "pytest" but not "make verify"

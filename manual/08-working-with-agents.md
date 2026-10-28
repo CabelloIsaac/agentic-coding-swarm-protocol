@@ -83,8 +83,8 @@ commands resolved from `swarm.json`, with a branch for each failure the command 
 thoughts that precede a shortcut and what is true instead; and an evidence block the answer must contain. Long
 material (every failure message, subagent briefs, report skeletons) lives in a sibling file read on demand.
 
-Templates: `skills/` (`playbook`, `worktree`, `tdd`, `debug`, `verify`, `review`, `new-adr`, `land`, `audit-repo`,
-`adopt`).
+Templates: `skills/` (`playbook`, `worktree`, `tdd`, `debug`, `verify`, `review`, `change`, `extend`, `new-adr`,
+`land`, `audit-repo`, `adopt`).
 
 ## Subagents
 

@@ -1,7 +1,9 @@
 /**
  * Integrates the worktree's branch into the integration branch: fetch → rebase → numbered ADRs and index → full
  * verification → fast-forward → push. One at a time (a lock in git's common directory) and never advancing the
- * integration branch with anything red. With a remote, it aborts if the remote integration branch has commits the
+ * integration branch with anything red. It integrates exactly the commit it verified: the SHA is recorded right before
+ * verify, and if the branch moved meanwhile (a Stop-hook `wip:` commit, a stray edit) it aborts instead of
+ * fast-forwarding to a tip nobody verified. With a remote, it aborts if the remote integration branch has commits the
  * local one lacks (two histories) and publishes the branch at the end (a single published history, only from the
  * designated publisher clone).
  *
@@ -85,6 +87,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
 
   const lock = acquireLock(root, branch);
   let attempts = 0;
+  let head = '';
   try {
     const remote = hasRemote(root);
     if (remote) checkRemote(root, opts, log);
@@ -97,14 +100,18 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
       }
       const docs = regenerateDocs(root);
       if (docs) log(docs);
-      log(`verifying ${pendingSubjects(root).length} commit(s) on top of ${git(root, 'rev-parse', '--short', INTEGRATION_BRANCH)}…`);
+      // The exact commit under verification: only this SHA may reach the integration branch
+      const verified = git(root, 'rev-parse', 'HEAD');
+      log(`verifying ${pendingSubjects(root).length} commit(s) on top of ${git(root, 'rev-parse', '--short', INTEGRATION_BRANCH)} (${verified.slice(0, 8)})…`);
       const ok = opts.verifyCmd ? runQuiet(root, opts.verifyCmd) : await verify(root, false);
       if (!ok) throw new LandError(`verification failed: ${INTEGRATION_BRANCH} was not touched`);
-      if (!isAncestor(root, INTEGRATION_BRANCH, 'HEAD')) {
+      assertUnchanged(root, verified);
+      if (!isAncestor(root, INTEGRATION_BRANCH, verified)) {
         log(`${INTEGRATION_BRANCH} moved during verification: rebasing and verifying again`);
         continue;
       }
-      advanceIntegration(root, branch);
+      advanceIntegration(root, verified);
+      head = verified;
       break;
     }
     // Inside the lock, so it does not race the gc of another land or of a session start in the main checkout
@@ -116,7 +123,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
     }
     const cleaned = await cleanMerged(root);
     if (cleaned) log(cleaned);
-    const result: LandResult = { branch, commits, attempts, head: git(root, 'rev-parse', '--short', 'HEAD'), seconds: Math.round((Date.now() - started) / 1000), ...published };
+    const result: LandResult = { branch, commits, attempts, head: head.slice(0, 8), seconds: Math.round((Date.now() - started) / 1000), ...published };
     record(root, { ...result, result: 'landed' });
     return result;
   } catch (e) {
@@ -198,20 +205,38 @@ function regenerateDocs(root: string): string | undefined {
 }
 
 /**
- * Fast-forward of the integration branch. If it is checked out somewhere (normally the main checkout) it is done there
- * with `merge --ff-only`, which moves the ref and the tree together; moving only the ref would leave that tree silently
- * undoing what was integrated. With no checkout, `update-ref` with the old value is a compare-and-swap.
+ * After verify: the branch tip must still be the verified SHA and the tree clean. Verify takes minutes, and in that
+ * window the session's Stop hook (or anyone editing the worktree) can add a commit; fast-forwarding the branch name
+ * would then publish a commit nobody verified. Files the dev tools regenerate are restored first, they are not work.
  */
-function advanceIntegration(root: string, branch: string): void {
+function assertUnchanged(root: string, verified: string): void {
+  restoreGenerated(root);
+  const now = git(root, 'rev-parse', 'HEAD');
+  const dirty = dirtyPaths(root);
+  if (now === verified && dirty.length === 0) return;
+  const what = now !== verified ? `the branch moved from ${verified.slice(0, 8)} to ${now.slice(0, 8)}` : `${dirty.length} uncommitted change(s) appeared`;
+  throw new LandError(
+    `${what} during verification, so the tip is not what was verified: ${INTEGRATION_BRANCH} was not touched.\n` +
+      'Nothing may write to the worktree while land runs (the Stop hook already skips it). Absorb or drop the change (pnpm wt:commit "<message>") and run pnpm land again',
+  );
+}
+
+/**
+ * Fast-forward of the integration branch to the verified SHA, never to the branch name (its tip may have moved). If
+ * the integration branch is checked out somewhere (normally the main checkout) it is done there with `merge --ff-only`,
+ * which moves the ref and the tree together; moving only the ref would leave that tree silently undoing what was
+ * integrated. With no checkout, `update-ref` with the old value is a compare-and-swap.
+ */
+function advanceIntegration(root: string, verified: string): void {
   const holder = worktrees(root).find((w) => w.branch === INTEGRATION_BRANCH);
   if (!holder) {
     const old = git(root, 'rev-parse', INTEGRATION_BRANCH);
-    git(root, 'update-ref', `refs/heads/${INTEGRATION_BRANCH}`, git(root, 'rev-parse', 'HEAD'), old);
+    git(root, 'update-ref', `refs/heads/${INTEGRATION_BRANCH}`, verified, old);
     return;
   }
   restoreGenerated(holder.path);
   try {
-    execFileSync('git', ['merge', '--ff-only', '--quiet', branch], { cwd: holder.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['merge', '--ff-only', '--quiet', verified], { cwd: holder.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     const stderr = String((e as { stderr?: unknown }).stderr ?? '');
     const dirty = dirtyPaths(holder.path);

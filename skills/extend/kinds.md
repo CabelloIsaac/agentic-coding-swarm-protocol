@@ -1,0 +1,21 @@
+# Kinds of piece and what each guide adds
+
+The reference project has twelve extension guides. Your repo's names differ; the kinds recur in most products,
+and each one has its own traps on top of the common skeleton ([skeleton.md](skeleton.md)).
+
+| Kind | What it is | Traps the guide guards against |
+| --- | --- | --- |
+| External integration | the only piece that talks to an external system (API, deploy target, data source); modes mock, replay, live | direct HTTP or environment reads; a mock returning the normalized model; caching data that depends on a simulated clock; no cost estimate on a paid API; business errors inside a 200 response not mapped; no replay fixtures; credentials undocumented in `.env.example` |
+| Tool (capability) | a named operation with input and output schemas, effect, approval level and the evidence it leaves | name differs from the registry; `read` effect with side effects; writing published content outside the write pipeline; no evidence refs, so decisions cannot cite it; schemas without descriptions, so the model fills inputs badly; external effect without idempotency |
+| Event log or entity | a record type in an append-only log | editing past lines instead of appending; wall-clock timestamps; a required field without version bump and migration; missing actor or run id; unresolved references |
+| Tenant (customer, workspace) | data and configuration for one customer | needing code to add one (a generic tool is missing); permissions looser than the registry (ignored: the strictest wins); copying global catalog content into the tenant; testing on the seed instead of a copy |
+| LLM provider or model | an adapter to the canonical message format, real, mock and replay | the SDK imported outside its folder; stop reasons not mapped (refusal and max tokens must fail the run); history not append-only; missing price table, so the budget cannot block; replay keys that change with the model |
+| UI or dashboard section | a page that reads through the core package | storage or log access from the UI; business logic in the page; actions that do not validate ids or check the tenant; paid runs triggered from the UI; internal ids shown to users; no empty state; untested at phone width |
+| Evaluator or audit check | pure check logic shared by the audit and the write pipeline's evaluator | a blocking check that already fails on many pages (every improvement rolls back: use a regression rule); unnormalized text comparison (false positives); no label for users; not run across every seed tenant for false positives |
+| Findings detector | audits one asset and returns candidate findings the engine reconciles | a check the source does not measure reported as `ok` (unseen data can never close a finding); the detector writing findings instead of returning candidates; a failed source resolving findings instead of skipping its checks; not registered for periodic re-audit |
+| Skill, playbook, activity (catalog) | global procedures and units of work the agent loads | id not matching its path; missing required sections; write tools granted "just in case"; context too large; orphan skills; no recorded real run reviewed |
+| Content format | a new output format, layout or quality rule | text painted by the image model instead of composed (it skips the factuality check); the model writing the generator prompt instead of choosing from a versioned vocabulary; generated media presented as real; expiring provider URLs stored instead of the bytes with their provenance; spend outside the budget |
+| Simulator event or judge | events that happen to the simulated business, judges that read the logs | an event written straight into the logs instead of entering through the real ingestion path; the agent able to read the simulator's model; randomness or time not taken from the seed; a failing judge that does not cite the ids that caused it |
+| Guided pilot scenario | a scripted real-customer test that closes a change's pilot task | checks that read the real customer while the scenario runs on a rehearsal copy; ids in user-facing check messages; paid actions queued without a budget check; a scenario offered before its requirements are met |
+
+If the piece fits none of these, it is a new kind: write its guide (SKILL.md step 2).

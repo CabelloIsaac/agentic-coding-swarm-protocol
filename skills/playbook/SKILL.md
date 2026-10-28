@@ -14,6 +14,8 @@ Answer `$ARGUMENTS` with the least reading possible. The rules that always apply
 | You are about to… | Skill |
 | --- | --- |
 | start work, or you are in the main checkout; clean up worktrees | `worktree` |
+| change behavior or add a feature: explore, propose, apply, verify or archive the change | `change` |
+| add a new integration, tool, event log, UI section or other kind of piece | `extend` |
 | fix a bug or add behavior | `tdd` |
 | chase a failure whose cause is not proven, or a fix that did not work | `debug` |
 | say "done", "fixed" or "passes" | `verify` |
