@@ -94,6 +94,11 @@ describe('rules name their mechanism', () => {
 });
 
 describe('the documentation cites things that exist', () => {
+  // CLAUDE.md names these files as the home of the architecture and invariants: a missing one must fail, not be skipped
+  it('the architecture docs and the quality doc that CLAUDE.md names exist', () => {
+    expect([...ARCH_FILES, 'docs/quality.md', 'docs/README.md'].filter((f) => !exists(f))).toEqual([]);
+  });
+
   it('relative links resolve', () => {
     const broken = DOCS.flatMap((d) =>
       [...prose(read(d)).matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)]

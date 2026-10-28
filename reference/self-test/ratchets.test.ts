@@ -16,10 +16,11 @@ import {
   countLintWarnings,
   globToRegExp,
   initial,
+  loosened,
   targetFloor,
   tighten,
 } from '../scripts/ratchets.ts';
-import { LAND_VERIFY, commit, fixture, git, sha, subjects, write } from './helpers.ts';
+import { LAND_VERIFY, commit, fixture, git, review, sha, subjects, write } from './helpers.ts';
 
 const lines = (n: number) => 'x\n'.repeat(n);
 const sizeRatchet = (exceptions: Record<string, number> = {}) => ({ max: 500, include: ['src/**/*.ts'], exclude: ['**/*.test.ts'], exceptions });
@@ -160,11 +161,115 @@ describe('ratchets: CLI in a repo', () => {
   });
 });
 
+const FULL: Ratchets = {
+  fileSize: { max: 500, include: ['src/**/*.ts', 'lib/**/*.ts'], exclude: ['**/*.test.ts'], exceptions: { 'src/big.ts': 600 } },
+  coverage: { summary: 'c.json', floor: { lines: 80, branches: 70 }, maxGap: 1 },
+  lintWarnings: { command: 'x', budget: 5, perRule: { r1: 3 } },
+};
+const edit = (f: (r: Ratchets) => void): Ratchets => {
+  const copy = JSON.parse(JSON.stringify(FULL)) as Ratchets;
+  f(copy);
+  return copy;
+};
+
+describe('ratchets: loosening against the integration branch', () => {
+  it('every kind of loosening is reported, every kind of tightening is not', () => {
+    const red: [string, (r: Ratchets) => void, RegExp][] = [
+      ['new exception', (r) => { (r.fileSize as { exceptions: Record<string, number> }).exceptions['src/new.ts'] = 510; }, /new fileSize exception src\/new\.ts/],
+      ['larger exception', (r) => { (r.fileSize as { exceptions: Record<string, number> }).exceptions['src/big.ts'] = 601; }, /src\/big\.ts 600 → 601/],
+      ['higher max', (r) => { (r.fileSize as { max: number }).max = 600; }, /fileSize\.max 500 → 600/],
+      ['narrower include', (r) => { (r.fileSize as { include: string[] }).include = ['src/**/*.ts']; }, /include lost "lib\/\*\*\/\*\.ts"/],
+      ['wider exclude', (r) => { (r.fileSize as { exclude: string[] }).exclude.push('src/**'); }, /exclude gained "src\/\*\*"/],
+      ['section removed', (r) => { delete r.fileSize; }, /fileSize section removed/],
+      ['lower floor', (r) => { (r.coverage as { floor: Record<string, number> }).floor.lines = 79.9; }, /floor lines 80 → 79\.9/],
+      ['floor key removed', (r) => { delete (r.coverage as { floor: Record<string, number> }).floor.branches; }, /floor branches removed/],
+      ['higher maxGap', (r) => { (r.coverage as { maxGap: number }).maxGap = 2; }, /maxGap 1 → 2/],
+      ['higher budget', (r) => { (r.lintWarnings as { budget: number }).budget = 6; }, /budget 5 → 6/],
+      ['higher per-rule budget', (r) => { (r.lintWarnings as { perRule: Record<string, number> }).perRule.r1 = 4; }, /r1 3 → 4/],
+      ['per-rule budget removed', (r) => { (r.lintWarnings as { perRule: Record<string, number> }).perRule = {}; }, /budget for r1 removed/],
+    ];
+    for (const [name, mutate, re] of red) {
+      const found = loosened(FULL, edit(mutate));
+      assert.equal(found.length, 1, `${name}: ${found.join(' | ')}`);
+      assert.match(found[0] ?? '', re, name);
+    }
+    const green = edit((r) => {
+      const fs = r.fileSize as { max: number; include: string[]; exceptions: Record<string, number> };
+      fs.max = 400;
+      fs.include.push('app/**/*.ts');
+      delete fs.exceptions['src/big.ts'];
+      (r.coverage as { floor: Record<string, number>; maxGap: number }).floor.lines = 85;
+      (r.coverage as { maxGap: number }).maxGap = 0.5;
+      const l = r.lintWarnings as { budget: number; perRule: Record<string, number> };
+      l.budget = 1;
+      l.perRule = { r1: 0, r2: 1 };
+    });
+    assert.deepEqual(loosened(FULL, green), []);
+  });
+
+  it('`--tighten` output always passes the check against its own baseline', () => {
+    const { next } = tighten(FULL, { files: [{ path: 'src/big.ts', lines: 550 }], coverage: { lines: 90, branches: 75 }, lint: { warnings: 2, rules: { r1: 1 } } });
+    assert.deepEqual(loosened(FULL, next), []);
+  });
+
+  it('CLI: a hand-loosened file fails verify even though every measurement is within its own numbers', (t) => {
+    const fx = fixture(t);
+    const base = { fileSize: sizeRatchet({ 'src/big.ts': 600 }) };
+    commit(fx.main, 'ratchets', { 'quality-ratchets.json': JSON.stringify(base), 'src/big.ts': lines(600) });
+    git(fx.wt, 'rebase', '-q', 'main');
+    assert.equal(fx.run('ratchets').status, 0);
+
+    // Raising the exception makes the measurement green against the edited file: only the baseline notices
+    commit(fx.wt, 'feat: grow big.ts', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 700 }) }), 'src/big.ts': lines(700) });
+    const red = fx.run('ratchets');
+    assert.equal(red.status, 1, red.out);
+    assert.match(red.out, /quality-ratchets\.json loosened vs main: fileSize exception src\/big\.ts 600 → 700; ratchets only tighten/);
+    assert.equal(fx.run('ratchets', ['--size-only', 'src/big.ts']).status, 1, 'the quick tier checks it too');
+
+    // Tightening by hand is fine, and so is `--tighten`
+    commit(fx.wt, 'fix: shrink big.ts', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 550 }) }), 'src/big.ts': lines(550) });
+    assert.equal(fx.run('ratchets').status, 0);
+    commit(fx.wt, 'fix: shrink big.ts more', { 'src/big.ts': lines(520) });
+    assert.equal(fx.run('ratchets', ['--tighten']).status, 0);
+    assert.equal(fx.run('ratchets').status, 0);
+  });
+
+  it('a branch that is merely behind a tightening land is not loosened (the baseline is the merge base)', (t) => {
+    const fx = fixture(t);
+    commit(fx.main, 'ratchets', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 600 }) }), 'src/big.ts': lines(600) });
+    git(fx.wt, 'rebase', '-q', 'main');
+    commit(fx.main, 'chore: tighten quality ratchets', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 550 }) }), 'src/big.ts': lines(550) });
+    assert.equal(fx.run('ratchets').status, 0, 'the older numbers are not a loosening');
+  });
+
+  it('no baseline on the integration branch: a valid file passes', (t) => {
+    const fx = fixture(t);
+    commit(fx.wt, 'ratchets', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet() }), 'src/ok.ts': lines(5) });
+    const r = fx.run('ratchets');
+    assert.equal(r.status, 0, r.out);
+  });
+
+  it('land refuses to put a tightening commit on top of a loosened file even when verify is skipped', (t) => {
+    const fx = fixture(t);
+    commit(fx.main, 'ratchets', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 600 }) }), 'src/big.ts': lines(600) });
+    git(fx.wt, 'rebase', '-q', 'main');
+    commit(fx.wt, 'feat: grow', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 700 }) }), 'src/big.ts': lines(700) });
+    assert.equal(review(fx).status, 0);
+    const before = sha(fx.main, 'main');
+    const r = fx.run('land', ['--no-push'], { env: { [LAND_VERIFY]: 'true' } });
+    assert.notEqual(r.status, 0, r.out);
+    assert.match(r.out, /loosened vs main/);
+    assert.equal(sha(fx.main, 'main'), before);
+  });
+});
+
 describe('ratchets: land tightens after a green verify', () => {
   it('commits only the ratchets file on top of the verified SHA and integrates that commit', (t) => {
     const fx = fixture(t);
     commit(fx.wt, 'feat: shrink big.ts', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 700 }) }), 'src/big.ts': lines(650) });
     const verified = sha(fx.wt);
+    // quality-ratchets.json is a review-gate path: committing it needs a receipt (land's own tighten commit comes after the gate)
+    assert.equal(review(fx).status, 0);
     const r = fx.run('land', ['--no-push'], { env: { [LAND_VERIFY]: 'true' } });
     assert.equal(r.status, 0, r.out);
     assert.deepEqual(subjects(fx.main, `${verified}..main`), ['chore: tighten quality ratchets']);
@@ -178,6 +283,8 @@ describe('ratchets: land tightens after a green verify', () => {
     const fx = fixture(t);
     commit(fx.wt, 'feat: code', { 'quality-ratchets.json': JSON.stringify({ fileSize: sizeRatchet({ 'src/big.ts': 650 }) }), 'src/big.ts': lines(650) });
     const verified = sha(fx.wt);
+    // quality-ratchets.json is a review-gate path: committing it needs a receipt (land's own tighten commit comes after the gate)
+    assert.equal(review(fx).status, 0);
     const r = fx.run('land', ['--no-push'], { env: { [LAND_VERIFY]: 'true' } });
     assert.equal(r.status, 0, r.out);
     assert.equal(sha(fx.main, 'main'), verified);

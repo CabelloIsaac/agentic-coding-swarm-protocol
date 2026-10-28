@@ -19,6 +19,8 @@ jobs:
         run: node scripts/check-links.mjs
       - name: Eval suite loads (structure only, no model calls)
         run: node scripts/check-evals.mjs
+      - name: Conformance checker self-test
+        run: node --test 'scripts/*.test.mjs'
       - name: JSON manifests parse
         run: |
           for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json templates/claude/settings.json; do

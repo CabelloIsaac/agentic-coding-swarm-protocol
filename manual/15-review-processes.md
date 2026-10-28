@@ -70,6 +70,13 @@ How it works:
 3. A missing receipt, `changes_requested` or `open_high > 0` aborts the land: "run /swarm:review (no receipt for
    this change)". `land --no-review "<reason>"` bypasses it, and the bypass is logged.
 
+What the receipt proves, and what it does not: the report exists, has the recorded hash and size, and belongs to the
+patch id of this exact change. It does not prove that the reviewer was independent; that is process (a fresh agent
+or a person, never the author's own session). Scheduled runs (the weekly workflow, the new-agent test) hold an API
+key in the same job as project commands, which any project script can read: use a dedicated key with a spend cap
+set in the Anthropic console and rotate it monthly. A pull request opened from a model's output is a draft that a
+person reviews; it is never auto-merged.
+
 Start with `sensitive` and the template's globs (auth, payments, migrations, CI, quality gates, agent settings,
 lockfile). Move to `always` once reviews are routine and cheap. The specification is in
 [reference/README.md](../reference/README.md) (`land`, review gate); the Node implementation is

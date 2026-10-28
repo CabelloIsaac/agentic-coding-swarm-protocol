@@ -2,24 +2,30 @@
 
 You do not need to adopt everything. Each level works on its own and prepares the next one. Tick the boxes in your
 repo.
+The authoritative list of what each level writes and which checks it must pass is the table at the top of
+[skills/adopt/levels.md](skills/adopt/levels.md); these checklists follow it.
 
 ## Level 0 · In an hour (no new code)
 
 - [ ] Copy `templates/CLAUDE.md` to the root and fill in the real commands (install, single-file test, types, lint).
-      Under 200 lines. Every rule ends with `(enforced: <path>)`, naming the test, hook, script or CI job that holds
-      it, or with `(preference)`: be honest, a preference is fine as long as it is called one (the docs test checks
-      the markers from level 2).
-- [ ] Copy `templates/claude/settings.json` to `.claude/settings.json`: `deny` for `.env` and secrets, `ask` for
-      `git push`.
-- [ ] Add `CLAUDE.local.md` and `.claude/settings.local.json` to `.gitignore`; copy `templates/claude/.gitignore` to
-      `.claude/.gitignore` (session worktrees and the per-worktree ports file stay local).
-- [ ] Install the plugin (chapter 16 §0) and declare it in the project's `.claude/settings.json`; or, without the
-      plugin, copy `agents/` to `.claude/agents/` and `skills/` to `.claude/skills/`. Fastest:
-      `/swarm:adopt 0`.
+      Under 200 lines. Keep only rules that are true for this repo today, and only the level-0 group of rules (the
+      level-1 and level-2 groups come with their levels). Every rule ends with `(enforced: <path>)`, naming the
+      test, hook, script or CI job that holds it, or with `(preference)`: be honest, a preference is fine as long as
+      it is called one (the docs test checks the markers from level 2).
+- [ ] Copy `templates/claude/settings.json` to `.claude/settings.json` (plugin users; it declares the plugin and has
+      no session hooks) or `templates/claude/settings.no-plugin.json` (no plugin; it wires the session hooks):
+      `deny` for `.env` and secrets, `ask` for `git push`.
+- [ ] Add `CLAUDE.local.md`, `.claude/settings.local.json` and `.claude/worktrees/` to the root `.gitignore` (the one
+      place that ignores worktrees); copy `templates/claude/.gitignore` to `.claude/.gitignore` (only the
+      per-worktree ports file).
+- [ ] Install the plugin (chapter 16 §0) and declare it in the project's `.claude/settings.json` (already in the
+      template); or, without the plugin, copy `agents/` to `.claude/agents/` and `skills/` to `.claude/skills/`.
+      Fastest: `/swarm:adopt 0`.
 - [ ] Agree on per-change review: `reviewer` after every non-trivial change, `security-reviewer` on sensitive paths
       (chapter 15).
 - [ ] Agree as a team: **one session = one worktree** (`claude -w <task>`) and nobody edits the main checkout.
-- [ ] Create `docs/adr/` with `templates/adr/0000-template.md` and write ADR-0001 about adopting this flow.
+- [ ] Create `docs/adr/` with `templates/adr/0000-template.md` and `templates/adr/README.md` (the index with its
+      generated markers) and write ADR-0001 about adopting this flow.
 - [ ] Print `checklists/`.
 
 ## Level 1 · In a day (one gate)
@@ -29,11 +35,13 @@ repo.
 - [ ] CI (`templates/github/workflows/ci.yml`) that calls the same commands, without secrets, plus documented extra
       jobs where they apply (CI ⊇ verify: backend parity, image without secrets, backup/restore roundtrip).
 - [ ] Domain contract validators for the project's own data files, as a `verify` step.
-- [ ] Coverage floor just below what is measured, in `vitest.config.ts`; `allowOnly: false` in CI.
+- [ ] Coverage floor at measured minus half of `maxGap` (what `ratchets.ts --tighten` writes), in
+      `vitest.config.ts`; `allowOnly: false` in CI.
 - [ ] Ratchets: `templates/quality-ratchets.json` at the root, initialized with `ratchets.ts --init`
       (`reference/scripts/ratchets.ts`): no new file over 500 lines and oversized ones only shrink, the coverage
       floor at most one point under measured, a lint warning budget. `verify` checks them after the tests (`--quick`:
-      file size of the changed files); `land` tightens and commits the file (chapter 07, Ratchets).
+      file size of the changed files). Tightening by `land` arrives with level 2 (chapter 07, Ratchets).
+- [ ] The level-1 group of `CLAUDE.md` rules (gates, secrets scan, ratchets) and the secret-scan job of `ci.yml`.
 - [ ] `docs/quality.md` from `templates/docs/quality.md`: types, suppressions with a reason, tests, flakiness.
 - [ ] The `verify` skill (`skills/verify/`).
 - [ ] Branch protection on GitHub: CI required.
@@ -46,6 +54,9 @@ repo.
       `wt:status`, `wt:gc`, `wt:reap`, `wt:archive`.
 - [ ] A `pre-push` hook that lets only the publisher push the integration branch (`templates/githooks/pre-push`).
 - [ ] ADRs as drafts numbered on integration (`reference/scripts/adr.ts`) and a generated index.
+- [ ] Review gate: the `review` block in `swarm.json` with the project's core paths added to `sensitive` (or
+      `mode: always` for a library), and a first receipt from the `review` skill; `land` tightens the ratchets.
+- [ ] The level-2 group of `CLAUDE.md` rules, and `AGENTS.md`.
 - [ ] An invariants table (start with 5) and its architecture test (`templates/tests/architecture.test.ts`).
 - [ ] A documentation test (`templates/tests/docs.test.ts`): links, paths, new undocumented structure, and the
       rule markers of `CLAUDE.md` (every `enforced:` path exists).

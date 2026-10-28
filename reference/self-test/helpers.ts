@@ -177,3 +177,17 @@ export function deadPid(): number {
   if (!r.pid) throw new Error('could not spawn a child to obtain a dead pid');
   return r.pid;
 }
+
+/** A review report long enough for `review-receipt write` (what the review skill writes: agents, verdicts, findings). */
+export const REPORT_TEXT = `review: feature · base abc1234 · head def5678\nreviewer: 1 finding (DC-IDEM-02) fixed through tdd; verdict READY\nsecurity-reviewer: n/a\n${'verify after fixes: all green\n'.repeat(6)}`;
+
+/** Writes a report file in the fixture's base folder and returns its path. */
+export function reportFile(fx: { base: string }, text = REPORT_TEXT, name = 'review-report.md'): string {
+  write(fx.base, name, text);
+  return join(fx.base, name);
+}
+
+/** Reviews the worktree's change the way the skill ends: a report, then the receipt for it. */
+export function review(fx: Fixture): RunResult {
+  return fx.run('review-receipt', ['write', '--report', reportFile(fx), '--reviewers', 'reviewer']);
+}

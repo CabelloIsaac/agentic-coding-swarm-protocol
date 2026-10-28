@@ -15,6 +15,7 @@
 **/docs.test.*                  @your-org/project-team @your-org/playbook-owners
 **/vitest.config.*              @your-org/project-team @your-org/playbook-owners
 /.claude/settings.json          @your-org/project-team @your-org/playbook-owners
+/quality-ratchets.json          @your-org/project-team @your-org/playbook-owners
 /CLAUDE.md                      @your-org/project-team @your-org/playbook-owners
 /AGENTS.md                      @your-org/project-team @your-org/playbook-owners
 

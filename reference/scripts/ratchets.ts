@@ -11,6 +11,10 @@
  *                                           file itself, or a built-in default); refused once the file is committed
  *   --file <path>                           another ratchets file (default: config.ratchets.file)
  *
+ * `check` also compares the file with the one on the integration branch (the merge base, so a branch that is merely
+ * behind does not look loosened) and fails on any loosening: the measurements are only as honest as the numbers they
+ * are compared with, and an edit that raises a budget or adds an exception would otherwise turn every gate green.
+ *
  * The file (`quality-ratchets.json`, template in templates/) has three optional sections:
  *   fileSize      { max, include, exclude?, exceptions: { "<path>": <lines> } }   new files over max fail; an exception
  *                 that grew past its recorded size fails; recorded sizes only go down.
@@ -72,7 +76,7 @@ export interface Measured {
 }
 
 export interface Problem {
-  ratchet: 'fileSize' | 'coverage' | 'lintWarnings';
+  ratchet: 'fileSize' | 'coverage' | 'lintWarnings' | 'baseline';
   message: string;
 }
 
@@ -200,6 +204,61 @@ export function check(r: Ratchets, m: Measured): Problem[] {
     ...(r.coverage && m.coverage ? checkCoverage(r.coverage, m.coverage, r.coverage.floor ?? m.externalFloor ?? {}) : []),
     ...(r.lintWarnings && m.lint ? checkLint(r.lintWarnings, m.lint) : []),
   ];
+}
+
+/**
+ * What the working-tree file loosens compared with `baseline` (the version on the integration branch): a new or
+ * larger exception, a higher `max`, a narrower `include` or wider `exclude`, a lower floor or higher `maxGap`, a
+ * higher lint budget (total or per rule), a section or a per-rule budget that disappeared. Only ever-tightening
+ * edits (`--tighten`, a person lowering a number) produce an empty list.
+ */
+export function loosened(baseline: Ratchets, now: Ratchets): string[] {
+  const out: string[] = [];
+  const b = baseline.fileSize;
+  if (b) {
+    const n = now.fileSize;
+    if (!n) out.push('fileSize section removed');
+    else {
+      if (n.max > b.max) out.push(`fileSize.max ${b.max} → ${n.max}`);
+      for (const g of b.include) if (!n.include.includes(g)) out.push(`fileSize.include lost "${g}"`);
+      for (const g of n.exclude ?? []) if (!(b.exclude ?? []).includes(g)) out.push(`fileSize.exclude gained "${g}"`);
+      for (const [path, lines] of Object.entries(n.exceptions)) {
+        const was = b.exceptions[path];
+        if (was === undefined) out.push(`new fileSize exception ${path} (${lines})`);
+        else if (lines > was) out.push(`fileSize exception ${path} ${was} → ${lines}`);
+      }
+    }
+  }
+  const bc = baseline.coverage;
+  if (bc) {
+    const nc = now.coverage;
+    if (!nc) out.push('coverage section removed');
+    else {
+      if (nc.maxGap > bc.maxGap) out.push(`coverage.maxGap ${bc.maxGap} → ${nc.maxGap}`);
+      if (bc.floor && !nc.floor) out.push('coverage.floor removed');
+      for (const k of COVERAGE_KEYS) {
+        const was = bc.floor?.[k];
+        if (was === undefined) continue;
+        const is = nc.floor?.[k];
+        if (is === undefined) out.push(`coverage floor ${k} removed`);
+        else if (is < was) out.push(`coverage floor ${k} ${was} → ${is}`);
+      }
+    }
+  }
+  const bl = baseline.lintWarnings;
+  if (bl) {
+    const nl = now.lintWarnings;
+    if (!nl) out.push('lintWarnings section removed');
+    else {
+      if (nl.budget > bl.budget) out.push(`lintWarnings.budget ${bl.budget} → ${nl.budget}`);
+      for (const [rule, was] of Object.entries(bl.perRule ?? {})) {
+        const is = nl.perRule?.[rule];
+        if (is === undefined) out.push(`lintWarnings budget for ${rule} removed`);
+        else if (is > was) out.push(`lintWarnings ${rule} ${was} → ${is}`);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -337,6 +396,37 @@ export function measure(root: string, r: Ratchets, opts: MeasureOptions = {}): M
   return m;
 }
 
+/**
+ * The ratchets file as the integration branch has it, from the merge base with HEAD (falls back to the branch tip).
+ * `undefined` when the branch does not have the file yet (the first commit of the ratchets) or it does not parse:
+ * then only the working-tree file is validated. The merge base, not the tip: a branch that is behind a land that
+ * tightened the file has the older, looser numbers without having loosened anything.
+ */
+export function loadBaseline(root: string, file: string, integration = config.integrationBranch): Ratchets | undefined {
+  const git = (...args: string[]) => {
+    try {
+      return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    } catch {
+      return undefined;
+    }
+  };
+  const ref = git('merge-base', integration, 'HEAD')?.trim() || integration;
+  const raw = git('show', `${ref}:${file}`);
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as Ratchets;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Problems for every loosening of the working-tree file against the integration branch's version. */
+export function baselineProblems(root: string, file: string, now: Ratchets, integration = config.integrationBranch): Problem[] {
+  const baseline = loadBaseline(root, file, integration);
+  if (!baseline) return [];
+  return loosened(baseline, now).map((what) => ({ ratchet: 'baseline', message: `${file} loosened vs ${integration}: ${what}; ratchets only tighten` }));
+}
+
 export function loadRatchets(file: string): Ratchets {
   return JSON.parse(readFileSync(file, 'utf8')) as Ratchets;
 }
@@ -395,7 +485,7 @@ export function main(argv: string[], cwd = process.cwd(), log: (line: string) =>
 
   const sizeOnly = argv.includes('--size-only');
   const m = measure(root, r, sizeOnly ? { sections: ['fileSize'], files: positional.length ? positional : undefined } : {});
-  const problems = check(r, m);
+  const problems = [...baselineProblems(root, file, r), ...check(r, m)];
   if (!sizeOnly && r.coverage && !m.coverage) problems.push({ ratchet: 'coverage', message: `no coverage summary at ${r.coverage.summary}: run the tests with coverage (json-summary reporter) first` });
   for (const p of problems) log(`✗ ${p.ratchet}: ${p.message}`);
   const checked = sizeOnly ? 'fileSize' : (['fileSize', 'coverage', 'lintWarnings'] as const).filter((s) => r[s]).join(', ');

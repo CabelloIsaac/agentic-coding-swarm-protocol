@@ -8,18 +8,28 @@
  * id, so a receipt can never be reused for code nobody reviewed. It does change when the integration branch edits the
  * context lines around the change's hunks; then the change is reviewed again, which is what a moved context deserves.
  *
- *   node review-receipt.ts write --reviewers reviewer,security-reviewer --verdict pass --open-high 0
+ *   node review-receipt.ts write --report <review.md> --reviewers reviewer,security-reviewer --verdict pass --open-high 0
  *   node review-receipt.ts check            exit 0 if land would accept the change, 1 with the reason otherwise
+ *
+ * A receipt is only as good as the review behind it, and the names in it are typed by the session that wants to land.
+ * So the review skill also leaves its full report (findings with their DC ids, the agents dispatched, their verdicts)
+ * at `<git-common-dir>/swarm-reviews/<patch_id>.md`; the receipt stores that file's sha256 and size, `write` refuses a
+ * missing or tiny report, and `check` refuses a receipt whose report is missing or was edited afterwards. This does
+ * not prove a review happened (nothing local can), but a pass now needs a document someone has to fabricate, which
+ * an audit or a reviewer can read.
  *
  * The review skill can write the same file with plain git and printf (see skills/review/SKILL.md), so the receipt
  * works in any stack; this script is the Node convenience and the implementation `land` uses.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { config, type ReviewConfig, type ReviewMode } from './dev-flow.config.ts';
 
 export const RECEIPTS_DIR = 'swarm-reviews';
+/** A report shorter than this cannot hold a findings list, the agents and their verdicts. */
+export const MIN_REPORT_BYTES = 200;
 
 export interface ReviewReceipt {
   patch_id: string;
@@ -32,6 +42,9 @@ export interface ReviewReceipt {
   /** High-severity findings still open. A passing receipt has 0. */
   open_high: number;
   at: string;
+  /** sha256 (hex) and size of `<patch_id>.md`, the review report; the gate refuses a receipt without them. */
+  report_sha256?: string;
+  report_bytes?: number;
 }
 
 export interface GateResult {
@@ -108,10 +121,14 @@ export function matchSensitive(paths: string[], globs: string[]): string[] {
 /**
  * The review config in force: the `review` block of `swarm.json` **as it is on the integration branch**, else the
  * fallback. Read from the integration branch on purpose: a branch must not be able to switch off its own review by
- * editing the manifest (and `swarm.json` is itself a sensitive path).
+ * editing the manifest (and `swarm.json` is itself a sensitive path). The published copy (`<remote>/<integration>`)
+ * wins when it exists: the local branch is one `git commit` away from relaxing the gate, the remote one needs the
+ * publisher's push.
  */
-export function loadReviewConfig(cwd: string, integrationBranch: string, fallback: ReviewConfig): ReviewConfig {
-  const raw = tryGit(cwd, ['show', `${integrationBranch}:swarm.json`]);
+export function loadReviewConfig(cwd: string, integrationBranch: string, fallback: ReviewConfig, remote: string = config.remote): ReviewConfig {
+  const published = `${remote}/${integrationBranch}`;
+  const ref = tryGit(cwd, ['rev-parse', '--verify', '--quiet', published]) !== undefined ? published : integrationBranch;
+  const raw = tryGit(cwd, ['show', `${ref}:swarm.json`]);
   if (raw === undefined) return fallback;
   let review: unknown;
   try {
@@ -145,7 +162,9 @@ export function parseReceipt(text: string): ReviewReceipt | undefined {
     typeof r.open_high === 'number' &&
     Number.isInteger(r.open_high) &&
     r.open_high >= 0 &&
-    typeof r.at === 'string';
+    typeof r.at === 'string' &&
+    (r.report_sha256 === undefined || typeof r.report_sha256 === 'string') &&
+    (r.report_bytes === undefined || typeof r.report_bytes === 'number');
   return ok ? (r as unknown as ReviewReceipt) : undefined;
 }
 
@@ -154,7 +173,25 @@ export function readReceipt(cwd: string, id: string): ReviewReceipt | undefined 
   return existsSync(path) ? parseReceipt(readFileSync(path, 'utf8')) : undefined;
 }
 
+/** Where the report of a change lives: next to its receipt. */
+export const reportPath = (cwd: string, id: string) => join(receiptsDir(cwd), `${id}.md`);
+
+const sha256 = (data: Buffer) => createHash('sha256').update(data).digest('hex');
+
+/** Why the report does not back the receipt, or `undefined` if it does. */
+export function reportProblem(cwd: string, receipt: ReviewReceipt): string | undefined {
+  if (!receipt.report_sha256 || receipt.report_bytes === undefined) return 'the receipt names no review report (report_sha256)';
+  const path = reportPath(cwd, receipt.patch_id);
+  if (!existsSync(path)) return `the review report ${receipt.patch_id}.md is missing`;
+  const data = readFileSync(path);
+  if (data.length < MIN_REPORT_BYTES) return `the review report is ${data.length} bytes (min ${MIN_REPORT_BYTES})`;
+  if (data.length !== receipt.report_bytes || sha256(data) !== receipt.report_sha256) return 'the review report was altered after the receipt was written';
+  return undefined;
+}
+
 export interface WriteOptions {
+  /** The review report (Markdown). Required: copied to `<patch_id>.md` next to the receipt when it lives elsewhere. */
+  report: string;
   reviewers: string[];
   verdict: ReviewReceipt['verdict'];
   openHigh: number;
@@ -168,6 +205,9 @@ export function writeReceipt(cwd: string, integrationBranch: string, opts: Write
   if (!opts.reviewers.length) throw new Error('a receipt names at least one reviewer');
   if (!Number.isInteger(opts.openHigh) || opts.openHigh < 0) throw new Error('--open-high must be a whole number ≥ 0');
   if (opts.verdict === 'pass' && opts.openHigh > 0) throw new Error('a passing review has no open high findings');
+  if (!existsSync(opts.report)) throw new Error(`--report ${opts.report} does not exist: the review skill writes the full report before the receipt`);
+  const report = readFileSync(opts.report);
+  if (report.length < MIN_REPORT_BYTES) throw new Error(`the review report is ${report.length} bytes (min ${MIN_REPORT_BYTES}): it must list the findings, the agents dispatched and their verdicts`);
   const receipt: ReviewReceipt = {
     patch_id: id,
     base: git(cwd, ['rev-parse', integrationBranch]),
@@ -176,9 +216,12 @@ export function writeReceipt(cwd: string, integrationBranch: string, opts: Write
     verdict: opts.verdict,
     open_high: opts.openHigh,
     at: (opts.now ?? new Date()).toISOString(),
+    report_sha256: sha256(report),
+    report_bytes: report.length,
   };
   const dir = receiptsDir(cwd);
   mkdirSync(dir, { recursive: true });
+  if (resolve(opts.report) !== resolve(reportPath(cwd, id))) copyFileSync(opts.report, reportPath(cwd, id));
   writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(receipt)}\n`);
   return receipt;
 }
@@ -186,7 +229,7 @@ export function writeReceipt(cwd: string, integrationBranch: string, opts: Write
 /**
  * The land gate. Mode `off` never requires a receipt; `always` requires one for every change; `sensitive` only when a
  * changed path matches a sensitive glob. When required, the receipt must exist for the current patch id, say `pass`
- * and have no open high findings.
+ * and have no open high findings, and the review report it hashes must still be there, unchanged.
  */
 export function reviewGate(cwd: string, integrationBranch: string, review: ReviewConfig): GateResult {
   const { mode } = review;
@@ -210,6 +253,8 @@ export function reviewGate(cwd: string, integrationBranch: string, review: Revie
       required: true,
       message: `the review of this change is ${receipt.verdict} with ${receipt.open_high} open high finding(s): fix them, then run /swarm:review again`,
     };
+  const unbacked = reportProblem(cwd, receipt);
+  if (unbacked) return { ...base, matched, patchId: id, receipt, ok: false, required: true, message: `${unbacked}: run /swarm:review again (it writes the report, then the receipt)` };
   return { ...base, matched, patchId: id, receipt, ok: true, required: true, message: `review receipt ${id.slice(0, 12)} ✓ (${receipt.reviewers.join(', ')}, ${receipt.at})` };
 }
 
@@ -226,7 +271,9 @@ if (import.meta.main) {
     if (cmd === 'write') {
       const verdict = arg(args, '--verdict') ?? 'pass';
       if (verdict !== 'pass' && verdict !== 'changes_requested') throw new Error('--verdict is pass or changes_requested');
+      const report = arg(args, '--report');
       const r = writeReceipt(cwd, integration, {
+        report: report ?? reportPath(cwd, patchId(cwd, integration) ?? ''),
         reviewers: (arg(args, '--reviewers') ?? 'reviewer').split(',').map((s) => s.trim()).filter(Boolean),
         verdict,
         openHigh: Number(arg(args, '--open-high') ?? '0'),
@@ -237,7 +284,7 @@ if (import.meta.main) {
       console.log(`${g.ok ? '✓' : '✗'} ${g.message}`);
       if (!g.ok) process.exitCode = 1;
     } else {
-      console.error('usage: review-receipt.ts write [--reviewers a,b] [--verdict pass|changes_requested] [--open-high N] | check [--integration <branch>]');
+      console.error('usage: review-receipt.ts write [--report <review.md>] [--reviewers a,b] [--verdict pass|changes_requested] [--open-high N] | check [--integration <branch>]');
       process.exitCode = 2;
     }
   } catch (e) {

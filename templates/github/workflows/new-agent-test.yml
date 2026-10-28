@@ -6,10 +6,19 @@
 # Requires the ANTHROPIC_API_KEY secret and, before that, an approved company data policy: it sends code to a model
 # and spends money (capped by --max-turns and --max-budget-usd). Without the secret the workflow skips itself.
 #
+# Residual risk, stated plainly: the agent runs the project's own commands (verify, tests) with ANTHROPIC_API_KEY in
+# the environment of its step, so any project script, or any instruction injected through repo content, can read the
+# key. Use a dedicated key with a spend cap set in the Anthropic console and rotate it monthly. The key appears only
+# on the `claude` step; the judge step has none. The judge also trusts nothing the agent could edit: it reads the
+# acceptance command and commands.verify from the base commit, and fails the verdict if the agent touched
+# swarm.json, docs/handover/, .github/ or quality-ratchets.json.
+#
 # Security, as in weekly-review.yml: least privilege, read-only token, no persisted git credentials, the API key
 # only in the agent step, no write token anywhere, nothing is pushed. The agent's Bash is limited to git read/commit
 # commands and the project's own commands from swarm.json; network tools are denied.
-# Pin every action to a full commit SHA in your repo (and let Dependabot bump them); tags are mutable.
+# Pin actions: keep `@vN` while adapting; before adopting, replace each tag with its full commit SHA, e.g.
+#   gh api repos/actions/checkout/git/ref/tags/v4.2.2 --jq .object.sha   (and let Dependabot bump them).
+# Tags are mutable, SHAs are not.
 name: new-agent-test
 on:
   schedule:
@@ -93,20 +102,26 @@ jobs:
           BASE="$(cat "$RUNNER_TEMP/base.sha")"
           git log --oneline "$BASE..HEAD" > report/commits.txt
           git diff "$BASE" > report/agent.diff
-          ACCEPT="$(sed -n 's/^<!-- acceptance: \(.*\) -->$/\1/p' docs/handover/reference-task.md | head -1)"
+          # The judge's inputs come from the base commit, never from the agent's working tree.
+          ACCEPT="$(git show "$BASE:docs/handover/reference-task.md" | sed -n 's/^<!-- acceptance: \(.*\) -->$/\1/p' | head -1)"
+          JUDGE_VERIFY="$(git show "$BASE:swarm.json" | jq -r '.commands.verify // empty')"
+          # Files the agent must not touch: its own acceptance criteria, the gate and the workflows.
+          { git diff --name-only "$BASE"; git ls-files --others --exclude-standard; } | sort -u > report/changed-files.txt
+          TAMPER="$(grep -E '^(swarm\.json|docs/handover/|\.github/|quality-ratchets\.json)' report/changed-files.txt | tr '\n' ' ')"
           set +e
           if [ -n "$ACCEPT" ]; then bash -c "$ACCEPT" > report/acceptance.log 2>&1; ACC=$?; else ACC=missing; fi
-          bash -c "$(jq -r '.commands.verify' swarm.json)" > report/verify.log 2>&1; VER=$?
+          if [ -n "$JUDGE_VERIFY" ]; then bash -c "$JUDGE_VERIFY" > report/verify.log 2>&1; VER=$?; else VER=missing; fi
           COMMITS=$(wc -l < report/commits.txt | tr -d ' ')
           DIRTY=$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')
           VERDICT=fail
-          [ "$ACC" = "0" ] && [ "$VER" = "0" ] && [ "$COMMITS" -gt 0 ] && [ "$DIRTY" = "0" ] && [ -f report/handover-report.md ] && VERDICT=pass
+          [ "$ACC" = "0" ] && [ "$VER" = "0" ] && [ "$COMMITS" -gt 0 ] && [ "$DIRTY" = "0" ] && [ -f report/handover-report.md ] && [ -z "$TAMPER" ] && VERDICT=pass
           {
             echo "# New-agent test · $(date -u +%F) · $(git rev-parse --short "$BASE")"
             echo
             echo "verdict: $VERDICT"
             echo "acceptance: $ACC · verify: $VER · commits: $COMMITS · uncommitted tracked files: $DIRTY · agent exit: $(cat "$RUNNER_TEMP/agent.exit")"
             echo "agent report: $([ -f report/handover-report.md ] && echo present || echo missing)"
+            echo "protected files touched by the agent: ${TAMPER:-none}"
             echo
             echo "A fail means the project depends on knowledge that is in nobody's files. Turn every gap in"
             echo "handover-report.md into a docs fix before the next run."

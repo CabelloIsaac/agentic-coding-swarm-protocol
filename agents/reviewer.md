@@ -13,8 +13,8 @@ and prove more.
 
 ## Inputs
 
-The caller should give you: the base (default: `git merge-base HEAD main`; use `master` if that is the default
-branch), the spec or plan if there is one (an OpenSpec change, `SPEC.md`, a task text), and one line on intent. If
+The caller should give you: the base (default: `git merge-base HEAD <integration>`, the integration branch from `swarm.json`
+(`integrationBranch`, default `main`)), the spec or plan if there is one (an OpenSpec change, `SPEC.md`, a task text), and one line on intent. If
 the spec is missing, review correctness and repo rules only and say so in the report. Never ask questions back:
 state your assumption and continue.
 
@@ -79,6 +79,9 @@ state your assumption and continue.
 - Do not report Low.
 
 ## Output
+
+You are read-only and do not write the review report: the `review` skill pastes this output into the report it
+saves next to the receipt, so keep it complete and self-contained (every finding with its evidence).
 
 Return only this, at most ~40 lines:
 

@@ -1,6 +1,6 @@
 {
   "name": "swarm",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Production workflow for teams that ship with AI coding agents: one worktree per session, a single verification gate, serialized always-green integration, ADRs, scheduled review agents and token-efficient defaults.",
   "author": { "name": "AntoniArco", "url": "https://github.com/AntoniArco" },
   "homepage": "https://github.com/AntoniArco/agentic-coding-swarm-protocol",

@@ -3,6 +3,83 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-10-28
+
+A fresh-eyes audit of 0.3.0 and a pilot adoption on a Python repository without the plugin (a non-Claude agent
+following the skills by hand) found three High findings, six Medium and sixteen points of friction. This release
+fixes them. The audit and pilot method is now part of the release checklist in `MAINTAINING.md`.
+
+### Fixed
+
+- **Ratchets could be loosened by hand** (`max: 500 → 5000`, a new exception, a higher budget) and `verify` and
+  `land` accepted it. `ratchets check` now loads the baseline from the merge base with the integration branch and
+  fails on any loosening ("quality-ratchets.json loosened vs <integration>: <what>; ratchets only tighten");
+  `--tighten` output always passes it. `quality-ratchets.json` is a review-gate path again (`swarm.json` sensitive
+  globs, the hook's gate warning, `CODEOWNERS`, the reference config).
+- **`land` skipped verification on an environment variable** meant for its own tests. `<PREFIX>LAND_VERIFY` is now
+  honoured only under `DEV_FLOW_CONFIG`, is otherwise ignored with a message, and when honoured the console line and
+  the land-log entry carry `verify: "overridden"`.
+- **The review gate read its config from the local integration branch**, so a direct commit on local `main` could
+  relax it. `review-receipt` reads `<remote>/<integration>` when that ref exists.
+- `review` skill and `reviewer` agent hard-coded `main`; they use `integrationBranch` from `swarm.json`. Stale
+  `scripts/` paths corrected to `scripts/dev/` in the review skill and the ratchets template.
+- **The new-agent CI judge trusted files the agent had just edited.** `templates/github/workflows/new-agent-test.yml`
+  now reads the acceptance command and `commands.verify` from the base commit with `git show "$BASE:…"` and fails the
+  verdict if the agent's diff (tracked or untracked) touches `swarm.json`, `docs/handover/`, `.github/` or
+  `quality-ratchets.json`. The residual risk (project scripts run with the API key in the environment during the agent
+  step) is documented at the top of the file and in chapters 15 and 18: use a dedicated key with a spend cap, rotate
+  monthly.
+- **Session hooks ran twice with the shipped templates** (the settings template and the plugin both wired them).
+  `templates/claude/settings.json` keeps only the gate warning; `templates/claude/settings.no-plugin.json` carries the
+  session hooks for agents without the plugin.
+- **The gate warning in the settings template needed `jq`** and silently never fired without it; it is `sh` + `sed`
+  only now.
+- **Levels disagreed**: `commands.ratchets` was optional in §1 and a blocking level-1 check in §6, and the level-2
+  steps never added the `review` block they check for. `skills/adopt/levels.md` opens with one table (level → files
+  written → check ids); level 1 adds the ratchets step, level 2 the review block, the receipt and the `land` tighten;
+  `ADOPTION.md` follows the same table. L1.6 is split (level 1: present, run by verify, never loosened; level 2: land
+  tightens) and L2.7 has a PR-mode pass condition (a required CODEOWNERS review with the `reviewer` agent's report
+  attached).
+- **`(enforced:)` markers that overclaimed** in `templates/CLAUDE.md` (main-checkout rule, secrets, ADR, `x!`,
+  `@ts-ignore`): each now cites a mechanism that enforces it or is a `(preference)`. The template is grouped by the
+  level that creates each mechanism (`<!-- level 0/1/2 -->`), so a level-0 adopter copies only the level-0 group and
+  L0.6 passes; the docs-test template asserts that the architecture, quality and README docs it names exist.
+- Pilot friction on a Python repository, all addressed: the coverage-floor rule now matches the ratchet (measured
+  minus half the gap); the lint budget is defined per stack (the linter's diagnostics in report-only mode; `budget: 0`
+  where the tool has no warning level) with port notes for Python; `templates/adr/README.md` with the generated-index
+  markers exists; `.claude/worktrees/` is ignored in one place; the marketplace/`enabledPlugins` JSON is in the
+  settings template; non-plugin agents read the version from their checkout of this repo; INTEGRATION §5 says what to
+  run when the manifest has no `hooks`; §4 says a wrapper script is required for `verify` and what the Node-or-port
+  choice costs; the `tdd` skill has a Vitest / pytest / go test / cargo test table; the level-2 step asks which paths
+  are the project's core (a library needs `src/**` or `mode: always`, the backend-shaped defaults matched nothing);
+  `adopt` says how to integrate the adoption itself without `land`.
+
+### Changed
+
+- **A review receipt now requires the full review report** (`<patch_id>.md`, at least 200 bytes): the receipt stores
+  its sha256 and size, `check` refuses a missing or altered report, and the `review` skill writes the report before
+  the receipt. It proves the report exists and is unchanged; the reviewer's independence remains process.
+- `audit` reports landed, rebase-conflict and review-bypass counts from the land log since the previous snapshot, so a
+  `--no-review` bypass reaches the audit even when the log lives on one machine.
+- `templates/github/workflows/weekly-review.yml` opens its PR as a draft and says it must never be auto-merged; every
+  workflow template replaces the empty "pin to a SHA" comment with the `gh api … --jq .object.sha` command that
+  resolves one.
+- "T-checks" wording left from the rename is now "X-checks" everywhere; the `learn` skill says "a temp dir outside the
+  repo" instead of a Claude-specific scratchpad.
+
+### Added
+
+- **`scripts/check-conformance.mjs`**: a deterministic checker for every INTEGRATION.md §6 check (L0.1–L3.5,
+  X1–X5). It prints ✓/✗/? per id, supports `--json`, `--level N`, `--transfer`, `--all`, reports version drift, and
+  exits 0, 1 or 2. 21 checks are mechanical; five need judgement (running verify, timing, running the audit, audit
+  age, the hidden-knowledge count) and are printed as `?` with what to verify. `/swarm:adopt --check` runs it first
+  and the agent judges only the `?` lines; `level` rises only on exit 0 with every `?` resolved as pass. 22 self-tests
+  in CI (`node --test 'scripts/*.test.mjs'`).
+- `templates/github/workflows/ci.yml` gains a gitleaks `secrets` job (with its license note), so "never commit
+  secrets" has a mechanism; `templates/docs/quality.md` gains the "Anti-patterns" section the `learn` skill cites.
+- `MAINTAINING.md` release checklist: a fresh-eyes audit of the repo and a pilot adoption by an agent without the
+  plugin before every minor release; both found what the self-tests could not.
+
 ## [0.3.0] — 2026-10-28
 
 The theme of this release: every rule the protocol states now has a mechanism, the mechanisms are tested, and a

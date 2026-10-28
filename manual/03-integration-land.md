@@ -97,9 +97,13 @@ enforces verify.
   `review-bypassed`, where the daily review, which reads the land log, sees it. Use it for an emergency, a docs-only
   change in `always` mode, or a change a person reviewed outside the tooling.
 
-A receipt is a statement, not a cryptographic proof: an agent can write one without a review. What it buys is that
-skipping review becomes a deliberate, logged act instead of a silent default, and that a review is bound to the
-exact change it saw. For a team that integrates through pull requests, the same rule is a required review on
+The receipt carries a hash and size of the full review report stored next to it, and `check` verifies both. That
+proves the report exists, is long enough to be a report, and has not changed since the receipt was written. It does
+not prove the reviewer was independent or competent: the session that wants to land still writes the receipt, so
+independence remains a process matter (a fresh agent, a person, a required CODEOWNERS review). What the gate buys
+is that skipping review becomes a deliberate, logged act instead of a silent default, and that a review is bound to
+the exact change it saw. The receipt is written by a plain shell sequence (it uses command substitution), so an
+agent whose shell tool is restricted to simple commands must run it through a script file instead. For a team that integrates through pull requests, the same rule is a required review on
 protected paths (`CODEOWNERS`) plus branch protection.
 
 ## Conflicts

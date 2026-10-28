@@ -22,7 +22,8 @@ section a step names; do not restate it to the user.
 1. **A level is adopted only on top of conformant lower levels.** Before applying level N, run `--check` for N−1.
    Any failure → stop and report it; fix that level first.
 2. **`swarm.json` is the adoption marker.** Its `level` rises only after `--check N` passes, never by hand.
-3. **Merge, never overwrite.** Read every destination file before writing it (`CLAUDE.md`, `.claude/settings.json`,
+3. **Merge, never overwrite.** Copy only the level-N group of rules from `templates/CLAUDE.md`, and only the rules
+   that are true for this repo today. Read every destination file before writing it (`CLAUDE.md`, `.claude/settings.json`,
    CI, `.gitignore`). Keep what the repo has; add what is missing; show the diff.
 4. **Never relax an existing gate.** If the repo is stricter on something, the repo wins.
 5. **Every step ends with its evidence** (command and output). A failed check stops the run.
@@ -39,12 +40,25 @@ not working teaches the team to ignore the protocol (chapter 16 §0).
 
 ### `--check [level]`
 
-Run every check in INTEGRATION.md §6 for levels 0…level, in order. Write nothing. Output exactly the §6 format: one
-line per check with `✓`/`✗`, its id, name and evidence, then
-`result: level N conformant; level N+1 blocked by <ids>`.
+The mechanical checks are a script, not your judgement: two agents must reach the same level.
 
-**Version check, every `--check`.** Read the plugin's `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`,
-or, when that variable is unset, `${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json`. Compare it with `version`
+1. Run `node ${CLAUDE_SKILL_DIR}/../../scripts/check-conformance.mjs --repo . --level N` (N = the level asked for,
+   default the `level` in `swarm.json`; `--all` for levels 0-3 plus transfer). It prints one line per §6 check:
+   `✓` proven, `✗` failed (with what is missing), `?` needs judgement (with what to verify), then the version line
+   and `result:`. Exit 0 means every mechanical check passed; 1, that one failed; 2, no manifest.
+2. Resolve only the `?` lines, each by doing exactly what its line says (run the command, time it, read the CI
+   run, read the audit date). A `✓` or `✗` is final: do not re-judge it, and do not run checks the script already ran.
+   `✓` lines marked "structure only" prove the file exists; confirm what they defer to in the L1.1 verify output.
+3. Report the script's output verbatim, then one verdict line per `?` (`✓`/`✗` and its evidence), then
+   `result: level N conformant; level N+1 blocked by <ids>`. Write nothing.
+
+`level` in `swarm.json` may rise only when the script exits 0 **and** every `?` line is resolved as pass. A
+failed script or an unresolved `?` leaves it where it is.
+
+**Version check, every `--check`.** The script prints the line `version <v> = plugin` or `behind`/`ahead` (plugin
+version from `${CLAUDE_PLUGIN_ROOT}`, else this plugin's own manifest); you act on it as below. Without the script, read the plugin's `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`,
+or, when that variable is unset, `${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json`; without the plugin, read
+`.claude-plugin/plugin.json` of your checkout of the protocol repo. Compare it with `version`
 in `swarm.json` as semver and add one line before `result:`:
 
 | Project vs plugin | Line |
@@ -58,7 +72,8 @@ Being behind is reported, never fixed by `--check`: raising `version` is an adop
 
 ### `--check transfer`
 
-Run X1–X5 from INTEGRATION.md § "Transferability (X1–X5)", plus the version check. Write nothing; read CI state with
+Run `node ${CLAUDE_SKILL_DIR}/../../scripts/check-conformance.mjs --repo . --transfer`. X3 and X5 are fully mechanical; X1 and X2 are
+`✓` for their structure only, so for those two you still read the latest CI run, and X4 is a `?`. Write nothing; read CI state with
 `gh run list --workflow <file> --limit 1 --json conclusion,createdAt` when `gh` is available, and say "not
 verifiable here" (✗) when it is not. Output the same format, ending with
 `result: absorbable` or `result: not absorbable; blocked by <ids>`. This track is independent of `level`: never
@@ -91,7 +106,8 @@ raise or lower `level` from it.
 6. **Check.** Run `--check <level>`. All green → set `"level": <level>` in `swarm.json`. Red → fix, or stop and
    report; never raise the level over a red check.
 7. **Wrap up.** One commit: `feat(dev-flow): swarm protocol level <N>`. Integrate the repo's way (land at level 2+,
-   otherwise its own PR flow). Summary: what was adopted, what was left out and why, the check output, and the
+   otherwise its own PR flow; without `land` or a remote, see levels.md "Integrating the adoption itself": commit on a
+   branch and merge with `--ff-only` after `verify`, never commit on the integration branch). Summary: what was adopted, what was left out and why, the check output, and the
    baseline to measure in two weeks (chapter 16 §10). Suggest `/clear` before the next level.
 
 ## Red flags

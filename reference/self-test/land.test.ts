@@ -36,6 +36,24 @@ describe('land', () => {
     assert.ok(!existsSync(fx.lockPath), 'the lock must be released');
   });
 
+  test('H2: the verify override is honoured only under DEV_FLOW_CONFIG, and then the log says overridden', (t) => {
+    const fx = fixture(t);
+    commit(fx.wt, 'feat: add a', { 'a.txt': 'a\n' });
+    const marker = join(fx.base, 'override-ran');
+    // Without the self-test marker the variable is ignored and the configured verify really runs (it is red here)
+    const ignored = fx.run('land', ['--no-push'], { env: { DEV_FLOW_CONFIG: '', [LAND_VERIFY]: `touch "${marker}"` } });
+    assert.match(ignored.out, /ignoring MYPROJECT_LAND_VERIFY \(only honoured under DEV_FLOW_CONFIG\)/);
+    assert.ok(!existsSync(marker), 'the override command ran without the marker');
+    assert.notEqual(ignored.status, 0, 'the real verify of the default config does not pass in this repo');
+    assert.ok(!fx.landLog().some((e) => e.verify === 'overridden'));
+
+    const honoured = fx.run('land', ['--no-push'], { env: verifyWith(`touch "${marker}"`) });
+    assert.equal(honoured.status, 0, honoured.out);
+    assert.ok(existsSync(marker));
+    assert.match(honoured.out, /verify: overridden/);
+    assert.equal(fx.landLog().find((e) => e.result === 'landed')?.verify, 'overridden');
+  });
+
   test('AUD-land-sha-no-fijado: a commit made while verify runs never reaches the integration branch', (t) => {
     const fx = fixture(t);
     commit(fx.wt, 'feat: add a', { 'a.txt': 'a\n' });

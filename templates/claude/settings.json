@@ -1,6 +1,21 @@
 {
-  "$comment": "Template for .claude/settings.json (versioned). Adjust paths and commands. deny rules apply to everyone; allow rules wait for each person's trust dialog. worktree.baseRef head: claude -w branches from the main checkout's current HEAD, not a remote ref that may lag. Pair with templates/claude/.gitignore.",
-  "worktree": { "baseRef": "head" },
+  "$comment": "Template for .claude/settings.json (versioned), for projects that use the swarm plugin. deny rules apply to everyone; allow rules wait for each person's trust dialog. worktree.baseRef head: claude -w branches from the main checkout's current HEAD, not a remote ref that may lag. Pair with templates/claude/.gitignore (it ignores worktree.env only; .claude/worktrees/ is ignored by the root .gitignore).",
+  "_hooks": "No SessionStart/Stop hooks here on purpose: the plugin runs hooks.sessionStart and hooks.stop from swarm.json (INTEGRATION.md section 3), and wiring them here too would run them twice. Without the plugin use settings.no-plugin.json instead. The PreToolUse gate warning below is sh-only (sed; no jq needed) and complements the plugin's own gate hook.",
+  "_plugin": "extraKnownMarketplaces and enabledPlugins declare the plugin for the team (manual chapter 16 section 0). Remove both in a project that does not use the plugin and use settings.no-plugin.json.",
+  "extraKnownMarketplaces": {
+    "agentic-coding-swarm-protocol": {
+      "source": {
+        "source": "github",
+        "repo": "AntoniArco/agentic-coding-swarm-protocol"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "swarm@agentic-coding-swarm-protocol": true
+  },
+  "worktree": {
+    "baseRef": "head"
+  },
   "permissions": {
     "allow": [
       "Bash(pnpm verify *)",
@@ -27,27 +42,13 @@
     ]
   },
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" setup", "timeout": 180 }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" wip", "timeout": 30 }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *vitest.config.ts|*biome.json|*architecture.test.ts|*docs.test.ts|*scripts/dev/land.ts|*scripts/dev/verify.ts|*.githooks/*) echo \"Warning: you are touching a quality gate ($f). Explain why in the commit; never relax it to make something pass.\" >&2 ;; esac; exit 0",
+            "command": "in=$(cat); f=$(printf '%s' \"$in\" | sed -n 's/.*\"file_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -1); case \"$f\" in *vitest.config.*|*jest.config.*|*biome.json|*architecture.test.*|*docs.test.*|*scripts/dev/land.*|*scripts/dev/verify.*|*quality-ratchets.json|*.githooks/*|*.github/workflows/*|*swarm.json|*.claude/settings.json) echo \"Warning: you are touching a quality gate ($f). Explain why in the commit; never relax it to make something pass.\" >&2 ;; esac; exit 0",
             "timeout": 5
           }
         ]

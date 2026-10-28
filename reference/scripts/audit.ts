@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { config } from './dev-flow.config.ts';
-import { toplevel } from './git.ts';
+import { commonDir, toplevel } from './git.ts';
 import { countLines } from './ratchets.ts';
 
 const A = config.audit;
@@ -77,6 +77,47 @@ export interface Metrics {
   last_audit_days?: number;
   rules?: { total: number; enforced: number; preference: number; unmarked: number; eroding?: string[] };
   detection?: Detection;
+  /** Land-log entries since the previous snapshot (all of them without one): what the workflow let through. */
+  land?: LandActivity;
+}
+
+export interface LandActivity {
+  landed: number;
+  conflict: number;
+  review_bypassed: number;
+  /** Date of the previous snapshot the counts start from; absent when there was none. */
+  since?: string;
+}
+
+/**
+ * Counts `landed`, `conflict` and `review-bypassed` entries of the land log. A bypass (`land --no-review`) is only
+ * visible there, so the audit has to read it or it never reaches anyone. Entries of the snapshot's own day count too:
+ * double-counting one afternoon is better than losing a bypass that happened after the snapshot was taken.
+ */
+export function landActivity(lines: string[], since?: string): LandActivity {
+  const out: LandActivity = { landed: 0, conflict: 0, review_bypassed: 0, ...(since ? { since } : {}) };
+  for (const line of lines) {
+    let e: { at?: unknown; result?: unknown };
+    try {
+      e = JSON.parse(line) as { at?: unknown; result?: unknown };
+    } catch {
+      continue;
+    }
+    if (since && !(typeof e.at === 'string' && e.at.slice(0, 10) >= since)) continue;
+    if (e.result === 'landed') out.landed++;
+    else if (e.result === 'conflict') out.conflict++;
+    else if (e.result === 'review-bypassed') out.review_bypassed++;
+  }
+  return out;
+}
+
+function readLandLog(cwd: string): string[] | undefined {
+  try {
+    const file = join(commonDir(cwd), `${config.projectName}-land-log.jsonl`);
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const run = (cwd: string, cmd: string, args: string[]): string => {
@@ -317,8 +358,10 @@ export function collect(cwd: string, opts: { deps?: boolean; today?: Date } = {}
     .split('\n')
     .filter((f) => f && !/\.(lock|snap)$/.test(f) && !/pnpm-lock/.test(f) && existsSync(join(cwd, f)));
   const envExample = existsSync(join(cwd, A.envExampleFile)) ? readFileSync(join(cwd, A.envExampleFile), 'utf8') : '';
+  const date = today.toISOString().slice(0, 10);
+  const landLines = readLandLog(cwd);
   return {
-    date: today.toISOString().slice(0, 10),
+    date,
     commit: run(cwd, 'git', ['rev-parse', '--short', 'HEAD']).trim(),
     lint: lintMetrics(cwd),
     escapes: countEscapes(files),
@@ -331,6 +374,7 @@ export function collect(cwd: string, opts: { deps?: boolean; today?: Date } = {}
     coverage: coverageMetrics(cwd),
     ...(opts.deps ? { deps: depsAudit(cwd) } : {}),
     last_audit_days: lastAuditDays(cwd, today),
+    ...(landLines ? { land: landActivity(landLines, previousSnapshot(cwd, date)?.date) } : {}),
     ...(existsSync(join(cwd, 'CLAUDE.md')) ? { rules: countRules(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8')) } : {}),
   };
 }
@@ -373,6 +417,14 @@ export function renderTable(m: Metrics, prev?: Metrics): string {
   rows.push(['Coverage · floor / measured', `${th} / ${me}`, '']);
   if (m.deps) rows.push(['`pnpm audit --prod`', Object.entries(m.deps).map(([k, v]) => `${k} ${v}`).join(', ') || '0', '']);
   rows.push(['Last audit', m.last_audit_days === undefined ? 'none recorded' : `${m.last_audit_days} days ago`, '']);
+  if (m.land) {
+    const l = m.land;
+    const pl = prev?.land;
+    const since = l.since ? ` (since ${l.since})` : '';
+    num(`Land log · landed${since}`, l.landed, pl?.landed);
+    num('Land log · rebase conflicts', l.conflict, pl?.conflict);
+    num('Land log · review bypasses (`--no-review`)', l.review_bypassed, pl?.review_bypassed);
+  }
   if (m.rules) {
     num('CLAUDE.md rules marked `preference`', m.rules.preference, prev?.rules?.preference, ` of ${m.rules.total}`);
     num('CLAUDE.md rules without a marker', m.rules.unmarked, prev?.rules?.unmarked);

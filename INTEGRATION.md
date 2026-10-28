@@ -12,7 +12,7 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
 ```json
 {
   "protocol": "swarm",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "level": 2,
   "integrationBranch": "main",
   "commands": {
@@ -50,7 +50,7 @@ after the conformance checks for that level pass (§6).
 | `hooks.sessionStart`, `hooks.stop` | level 2 | Run by the plugin hooks (§3). Optional for teams whose agents have no hooks; then §5 applies. |
 | `commands.newAdr` | level 2 | A command, or a path pattern for draft ADRs. |
 | `commands.audit` | level 3 | Offline debt metrics. |
-| `commands.ratchets` | optional (L1.6) | Checks `quality-ratchets.json`; with `--tighten`, rewrites it to the current values, only tightening. Default `node scripts/dev/ratchets.ts`. |
+| `commands.ratchets` | required from level 1 (L1.6) | Checks `quality-ratchets.json`; with `--tighten`, rewrites it to the current values, only tightening. Default `node scripts/dev/ratchets.ts`. |
 | `gates` | optional | Extra file globs whose edits trigger the quality-gate warning. |
 | `review.mode`, `review.sensitive` | optional (L2.7) | When `land` requires a review receipt: `always`, `sensitive` (default: only if a changed path matches a `sensitive` glob) or `off`. Read from the integration branch, so a branch cannot relax its own gate. Template default: `sensitive`, with globs for auth, payments, migrations, CI, quality gates and settings. |
 
@@ -62,8 +62,12 @@ the `review` skill once the branch is committed and triaged, at `<git-common-dir
 (local to the clone, never committed):
 
 ```json
-{"patch_id": "...", "base": "<integration sha>", "head": "<sha>", "reviewers": ["reviewer", "security-reviewer"], "verdict": "pass|changes_requested", "open_high": 0, "at": "<iso>"}
+{"patch_id": "...", "base": "<integration sha>", "head": "<sha>", "reviewers": ["reviewer", "security-reviewer"], "verdict": "pass|changes_requested", "open_high": 0, "at": "<iso>", "report_sha256": "<hex>", "report_bytes": 1234}
 ```
+
+Next to it, `<patch_id>.md` is the full review report (agents dispatched and their verdicts, findings with defect-class
+ids, triage; at least 200 bytes), and the receipt carries its sha256 and size: the reviewer names in a receipt are typed
+by the session that wants to land, so a `pass` without a report that hashes to the receipt does not count.
 
 `patch_id` is `git patch-id --stable` over `git diff <integration>...HEAD`: stable across a squash and a clean rebase
 (so it survives land's own rebase), new for any further edit. A receipt passes only with `verdict: "pass"` and
@@ -80,9 +84,9 @@ The names are free; the behaviour is the contract. Every guarantee below is some
 | `verifyQuick` | Run the steps affected by the diff against the integration branch, plus the structural tests. Finish in seconds to a few minutes. | Be accepted as the gate that closes a task. |
 | `commit` | Absorb a pending `wip:` commit and commit everything with the given message. | Push. |
 | `status` | List worktrees and branches with unintegrated work, dirty state and age. | Change anything. |
-| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. After the rebase and before verify, refuse a change without a passing review receipt for its patch id when `review.mode` requires it; `--no-review "<reason>"` skips that check and logs the reason. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
+| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. After the rebase and before verify, refuse a change without a passing review receipt for its patch id when `review.mode` requires it; `--no-review "<reason>"` skips that check and logs the reason. The verification is never replaced by an environment variable outside the reference's own self-tests; if one is honoured there, the land log says `verify: "overridden"`. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
 | `audit` | Run offline with no spend, print metrics, optionally store a snapshot for deltas. | Fix anything. |
-| `ratchets` | Check `quality-ratchets.json`: no new file over the size limit and no exception above its recorded size; measured coverage neither below the floor nor more than `maxGap` above it; lint warnings within budget. Run last in the full `verify` (after the tests, which write the coverage summary); the quick tier checks file size on the changed files only. With `--tighten` (run by `land` after a green verify), move every value to the measured one in the tightening direction only; `land` commits the file alone on top of the verified SHA and aborts if that commit touches anything else. | Loosen a value (add an exception, lower a floor, raise a budget), or change any other file. |
+| `ratchets` | Check `quality-ratchets.json`: no new file over the size limit and no exception above its recorded size; measured coverage neither below the floor nor more than `maxGap` above it; lint warnings within budget. Run last in the full `verify` (after the tests, which write the coverage summary); the quick tier checks file size on the changed files only. With `--tighten` (run by `land` after a green verify), move every value to the measured one in the tightening direction only; `land` commits the file alone on top of the verified SHA and aborts if that commit touches anything else. `check` also compares the file with the integration branch's copy (merge base) and fails on any loosening: new or larger exception, higher `max`, higher budget, lower floor, higher `maxGap`, narrower `include`; the file is a sensitive path of the review gate. | Loosen a value (add an exception, lower a floor, raise a budget), or change any other file. |
 | `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
 | `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout, during a rebase or merge, or while a `land` of its branch is running. |
 
@@ -105,14 +109,17 @@ The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swa
 
 In a repository without `swarm.json` the session hooks do nothing, so installing the plugin globally is safe, and a
 project that already wires its own SessionStart/Stop hooks in `.claude/settings.json` never gets them run twice. A
-project that adopts the manifest moves those commands into `hooks` and removes them from its settings. They read JSON with `jq`, `node` or `python3`,
+project that adopts the manifest moves those commands into `hooks` and removes them from its settings. The settings
+template carries no session hooks; without the plugin use `templates/claude/settings.no-plugin.json`. They read JSON with `jq`, `node` or `python3`,
 whichever exists first. The hook commands come from the project's own committed file, under the same trust as its
 `.claude/settings.json`: review changes to `swarm.json` like any other change to the build.
 
 ## 4. Stack equivalents
 
-The workflow tooling (`land`, `wt`, ADR numbering) only needs git and Node 24 and works as a dev tool in any stack;
-or port it from the specification. The gate itself uses the stack's native tools:
+The workflow tooling (`land`, `wt`, ADR numbering) needs git and Node 24. Choose explicitly: keep Node as a dev
+dependency (a Python team still carries it) and run the scripts as they are, or port them (ratchets about 190 lines,
+verify about 110, land about 150, plus `wt` and `adr`). Stack-neutral ports are welcome contributions. The gate
+itself uses the stack's native tools:
 
 | Stack | Lint | Types | Domain contract validators | Tests + coverage floor | Quick (affected only) | Architecture rules |
 |---|---|---|---|---|---|---|
@@ -124,7 +131,9 @@ or port it from the specification. The gate itself uses the stack's native tools
 | Anything | `make lint` | `make typecheck` | `make validate` | `make test` | `make test-changed` | a test in the project's own test runner |
 
 Wrap the steps in one entry point (`make verify`, `just verify`, `tox -e verify`, a script) and put that in
-`commands.verify`. The docs test (links, cited paths, structure in its index) is stack-independent: a
+`commands.verify`. A bare `make verify: lint test` cannot meet the §2 guarantee (one line per step, the tail of each
+failure, logs on disk): a wrapper script is required. A pilot's shape was about 110 lines: run the steps, print one
+line each, 40-line tails, a logs directory, and `--quick`. The docs test (links, cited paths, structure in its index) is stack-independent: a
 small script in any language.
 
 ## 5. Agents without hooks or plugins
@@ -134,7 +143,7 @@ through files: they read `AGENTS.md`, and the project's `AGENTS.md` (template:
 [templates/AGENTS.md](templates/AGENTS.md)) states the session protocol they must follow by hand:
 
 1. **Start:** work in a dedicated worktree and branch (`git worktree add ../<repo>-<task> -b <task>`), then run
-   `hooks.sessionStart` yourself.
+   `hooks.sessionStart` yourself; if `hooks` is absent, run `commands.setup` (level 1 or above) or nothing.
 2. **Iterate:** `verifyQuick` after each meaningful change.
 3. **Before stopping, every time:** commit (there is no `wip:` safety net without the Stop hook), with
    `Assumption: <what> — <why>` trailers for decisions taken without asking.
@@ -162,14 +171,14 @@ list by hand.
 | L1.3 | CI parity (CI ⊇ verify) | CI runs `commands.verify` (or exactly its steps) plus any extra jobs, each documented with why it is not in local verify; no step in the gate path may use `continue-on-error`. |
 | L1.4 | Coverage floor | a threshold is configured and enforced by the test step. |
 | L1.5 | No secrets in CI | the quality job reads no secrets. |
-| L1.6 | Ratchets | `quality-ratchets.json` exists and covers file size, coverage gap and lint budget; `verify` runs the check; `land` tightens it and commits only that file. |
+| L1.6 | Ratchets | Level 1: `quality-ratchets.json` exists and covers file size, coverage gap and lint budget; `verify` runs the check; nothing is loosened compared with the integration branch. Level 2 adds: `land` tightens it and commits only that file. |
 | L2.1 | Worktrees | the worktree directory is gitignored; the session start hook or §5 step 1 is documented. |
 | L2.2 | Session commands | `commands.commit`, `status` and `land` resolve to existing scripts. |
 | L2.3 | Protected integration | a `pre-push` publisher guard is installed (`git config core.hooksPath`) or branch protection is on. |
 | L2.4 | Invariants as tests | an architecture test exists and runs inside `verify`. |
 | L2.5 | Docs as tests | a docs test runs inside `verify` and checks both directions: links, cited paths and functions exist; every module, package or app, CLI command, extension guide (docs index) and ADR (ADR index) is documented; every invariant id in the table has a test and every tested id is in the table; prose uses one invariant numbering (no `INV-1` for `INV-01`). |
 | L2.6 | Non-Claude agents | `AGENTS.md` exists and states the §5 session protocol, or points to `CLAUDE.md` which does. |
-| L2.7 | Review gate | `land` requires a passing review receipt per `review.mode` (default `sensitive`) and the `review` skill writes receipts: a change touching a sensitive path, with no receipt, is refused with "run /swarm:review". |
+| L2.7 | Review gate | `land` requires a passing review receipt per `review.mode` (default `sensitive`) and the `review` skill writes receipts: a change touching a sensitive path, with no receipt, is refused with "run /swarm:review". In PR mode, a required review by CODEOWNERS in which the reviewer attaches the `reviewer` agent's report counts as the receipt. |
 | L3.1 | Roadmap | a roadmap file exists and its validator runs inside `verify`. |
 | L3.2 | Audit | `commands.audit` runs offline and exits 0. |
 | L3.3 | Fresh audit | the latest audit report is under 14 days old. |
@@ -179,7 +188,7 @@ list by hand.
 Output format:
 
 ```text
-swarm check · level 1 · protocol 0.2.0
+swarm check · level 1 · protocol 0.3.1
 ✓ L0.1 Manifest            swarm.json ok (level 0)
 ✓ L0.2 Agent memory        CLAUDE.md 142 lines, names "make verify"
 ✗ L1.3 CI parity           .github/workflows/ci.yml runs "pytest" but not "make verify"
@@ -203,7 +212,7 @@ manual chapter 12.
 | X5 | Handover checklist | `docs/handover/checklist.md` exists, copied from the protocol's checklist, and names the current owning team. |
 
 ```text
-swarm check · transfer · protocol 0.3.0
+swarm check · transfer · protocol 0.3.1
 ✓ X1 Fresh clone           fresh-clone.yml green 2026-10-26 (2 days)
 ✗ X2 New-agent test        last report 2026-09-14 (44 days), verdict pass
 ✓ X3 Explicit ownership    CODEOWNERS 14 rules · runbook 7/7 sections · dependencies 6 services

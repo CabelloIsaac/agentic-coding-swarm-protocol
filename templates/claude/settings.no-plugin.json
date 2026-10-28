@@ -1,0 +1,67 @@
+{
+  "$comment": "Variant of settings.json for agents or teams WITHOUT the swarm plugin: it adds the two session hooks the plugin would run. The commands come from swarm.json -> hooks.sessionStart / hooks.stop (the defaults below are the Node reference scripts). If the repo has no such scripts (swarm.json has no hooks block), delete the SessionStart and Stop entries: a hook that points at a missing script only prints errors. Do not use this file together with the plugin: the hooks would run twice.",
+  "worktree": {
+    "baseRef": "head"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pnpm verify *)",
+      "Bash(pnpm vitest run *)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm wt:status *)",
+      "Bash(pnpm wt:commit *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(pnpm land *)",
+      "Bash(pnpm wt:archive *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(**/secrets/**)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" setup",
+            "timeout": 180
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" wip",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "in=$(cat); f=$(printf '%s' \"$in\" | sed -n 's/.*\"file_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -1); case \"$f\" in *vitest.config.*|*jest.config.*|*biome.json|*architecture.test.*|*docs.test.*|*scripts/dev/land.*|*scripts/dev/verify.*|*quality-ratchets.json|*.githooks/*|*.github/workflows/*|*swarm.json|*.claude/settings.json) echo \"Warning: you are touching a quality gate ($f). Explain why in the commit; never relax it to make something pass.\" >&2 ;; esac; exit 0",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

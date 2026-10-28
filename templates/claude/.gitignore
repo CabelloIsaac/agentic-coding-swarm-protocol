@@ -1,3 +1,3 @@
-# Copy to .claude/.gitignore. Session worktrees and the per-worktree ports file written by `wt setup` are local.
-worktrees/
+# Copy to .claude/.gitignore. The per-worktree ports file written by `wt setup` is local.
+# Session worktrees (.claude/worktrees/) are ignored once, by the root .gitignore, so they stay out of every tool.
 worktree.env

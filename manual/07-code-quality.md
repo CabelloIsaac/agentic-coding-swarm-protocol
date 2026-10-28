@@ -134,6 +134,15 @@ dependencies):
   `--max-diagnostics=10000`, or it truncates the list), and run `node scripts/dev/ratchets.ts --init` before the
   first commit: every oversized file becomes an exception at its current size, the floor goes just under what is
   measured and the budget equals today's warnings. Once the file is committed, `--init` refuses.
+- **One rule for the first floor.** Measure, then set the floor to measured minus half of `maxGap` (with the
+  default `maxGap: 1`, half a point below). That is the value `--tighten` computes, so the first tighten changes
+  nothing. "1 to 2 points below" contradicts `maxGap: 1` and is not a rule.
+- **Lint budget in other stacks.** The budget counts the linter's diagnostics with the tool in "report, don't fail"
+  mode: ruff `--exit-zero --output-format json`, eslint `-f json`, biome `--reporter=json` (with
+  `--max-diagnostics=10000`). A linter without a warning severity (ruff has none) keeps `budget: 0`: every
+  diagnostic is an error. `--init` and the counter in `ratchets.ts` are Node-shaped; a Python team ported the
+  ratchets in about 190 lines and its verify in about 110. Keep `quality-ratchets.json` byte-compatible so the
+  ports stay interchangeable.
 - **Where the coverage floor lives.** Two options, pick one source. (a) In `quality-ratchets.json`, and the test
   runner reads it (`thresholds: JSON.parse(readFileSync('quality-ratchets.json', 'utf8')).coverage.floor`); `land`
   raises it automatically. (b) In `vitest.config.ts` as today: replace `floor` with `"floorFrom": "vitest.config.ts"`

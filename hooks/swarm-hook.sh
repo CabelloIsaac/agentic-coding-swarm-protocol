@@ -55,6 +55,7 @@ case "$mode" in
 */docs.test.*
 */scripts/dev/land.*
 */scripts/dev/verify.*
+*/quality-ratchets.json
 */.githooks/*
 */.github/workflows/*
 */swarm.json

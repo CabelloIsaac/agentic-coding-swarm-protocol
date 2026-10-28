@@ -16,7 +16,10 @@
  * covers (`always`, or `sensitive` with a sensitive path changed) needs a passing receipt for its patch id
  * (`review-receipt.ts`), or land aborts before spending minutes on verify.
  *
- * `<ENV_PREFIX>LAND_VERIFY="<command>"` replaces the verification (only for this script's own tests).
+ * `<ENV_PREFIX>LAND_VERIFY="<command>"` replaces the verification, and only the self-tests may use it: it is honoured
+ * solely when `DEV_FLOW_CONFIG` (the self-tests' config override) is also set; anywhere else it is ignored with a
+ * message, so an exported variable cannot silently skip verify. When honoured, the console line and the `landed`
+ * entry of the land log say `verify: "overridden"`.
  * If the rebase changes the lockfile, dependencies are reinstalled before verifying (otherwise verify fails with
  * "Cannot find module" for a package that is new on the integration branch).
  */
@@ -44,7 +47,7 @@ import {
   tryLandLock,
   worktrees,
 } from './git.ts';
-import { tightenFile } from './ratchets.ts';
+import { baselineProblems, loadRatchets, tightenFile } from './ratchets.ts';
 import { loadReviewConfig, reviewGate } from './review-receipt.ts';
 import { fetchRemote, foreignCommits, hasRemote, publish, REMOTE } from './remote.ts';
 import { verify } from './verify.ts';
@@ -64,10 +67,13 @@ export interface LandResult {
   pushed?: boolean;
   /** Git's error if the push failed (the integration branch already advanced locally). */
   pushError?: string;
+  /** `overridden` when the verification command was replaced (self-tests only); absent when `verify` really ran. */
+  verify?: 'overridden';
 }
 
 export interface LandOptions {
   squash?: string;
+  /** Replaces the verification (self-tests only; see `verifyOverride`). Recorded as `verify: "overridden"`. */
   verifyCmd?: string;
   /** Install after a rebase that changes the lockfile; defaults to `config.installCommand`. */
   installCmd?: string;
@@ -117,7 +123,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
       if (docs) log(docs);
       // The exact commit under verification: only this SHA may reach the integration branch
       const verified = git(root, 'rev-parse', 'HEAD');
-      log(`verifying ${pendingSubjects(root).length} commit(s) on top of ${git(root, 'rev-parse', '--short', INTEGRATION_BRANCH)} (${verified.slice(0, 8)})…`);
+      log(`verifying ${pendingSubjects(root).length} commit(s) on top of ${git(root, 'rev-parse', '--short', INTEGRATION_BRANCH)} (${verified.slice(0, 8)})${opts.verifyCmd ? ' [verify: overridden]' : ''}…`);
       const ok = opts.verifyCmd ? runQuiet(root, opts.verifyCmd) : await verify(root, false);
       if (!ok) throw new LandError(`verification failed: ${INTEGRATION_BRANCH} was not touched`);
       assertUnchanged(root, verified);
@@ -139,7 +145,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
     }
     const cleaned = await cleanMerged(root);
     if (cleaned) log(cleaned);
-    const result: LandResult = { branch, commits, attempts, head: head.slice(0, 8), seconds: Math.round((Date.now() - started) / 1000), ...published };
+    const result: LandResult = { branch, commits, attempts, head: head.slice(0, 8), seconds: Math.round((Date.now() - started) / 1000), ...published, ...(opts.verifyCmd ? { verify: 'overridden' as const } : {}) };
     record(root, { ...result, result: 'landed' });
     return result;
   } catch (e) {
@@ -239,6 +245,11 @@ function regenerateDocs(root: string): string | undefined {
  */
 function tightenRatchets(root: string, verified: string, log: (line: string) => void): string {
   const file = config.ratchets.file;
+  // Whatever verify did or did not run, a hand-loosened file never gets a tightening commit on top of it
+  if (existsSync(join(root, file))) {
+    const loose = baselineProblems(root, file, loadRatchets(join(root, file)));
+    if (loose.length) throw new LandError(`${loose.map((p) => p.message).join('\n')}\n${INTEGRATION_BRANCH} was not touched`);
+  }
   let changes: string[];
   try {
     changes = tightenFile(root, file);
@@ -319,6 +330,20 @@ function acquireLock(root: string, branch: string): LandLock {
   throw new LandError(`another pnpm land is running (${holder}); wait for it to finish and retry`);
 }
 
+/**
+ * The verification override, if it may be used. The variable existed for the self-tests but was read unconditionally,
+ * so any shell that exported it skipped verify with nothing in the log. Now it needs the self-tests' marker too.
+ */
+export function verifyOverride(env: NodeJS.ProcessEnv, log: (line: string) => void = console.error): string | undefined {
+  const cmd = env[landVerifyEnv];
+  if (!cmd) return undefined;
+  if (!env.DEV_FLOW_CONFIG) {
+    log(`ignoring ${landVerifyEnv} (only honoured under DEV_FLOW_CONFIG)`);
+    return undefined;
+  }
+  return cmd;
+}
+
 /** Log of every attempt (your workflow metrics), shared by all worktrees. */
 function record(root: string, entry: Record<string, unknown>): void {
   appendFileSync(join(commonDir(root), `${config.projectName}-land-log.jsonl`), `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`);
@@ -333,10 +358,11 @@ if (import.meta.main) {
       squash: squashAt >= 0 ? (args[squashAt + 1] ?? '') : undefined,
       noPush: args.includes('--no-push'),
       noReview: noReviewAt >= 0 ? (args[noReviewAt + 1] ?? '') : undefined,
-      verifyCmd: process.env[landVerifyEnv],
+      verifyCmd: verifyOverride(process.env),
     });
+    const overridden = r.verify ? ', verify: overridden' : '';
     const where = r.pushed ? `, published to ${REMOTE}` : r.pushed === false ? ', NOT published' : '';
-    console.log(`✓ ${r.commits} commit(s) of ${r.branch} on ${INTEGRATION_BRANCH} (${r.head}${where}, ${r.seconds}s, ${r.attempts} attempt(s))`);
+    console.log(`✓ ${r.commits} commit(s) of ${r.branch} on ${INTEGRATION_BRANCH} (${r.head}${where}${overridden}, ${r.seconds}s, ${r.attempts} attempt(s))`);
     if (r.pushed === false) process.exitCode = 1;
     console.log('  The worktree is still there: keep working on this branch or close the session; the next land or main-checkout session start deletes it.');
   } catch (e) {

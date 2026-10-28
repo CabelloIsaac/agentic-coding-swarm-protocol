@@ -58,6 +58,8 @@ people run them.
   defaults). `MYPROJECT_LAND_VERIFY="<command>"` replaces the verification inside `land`.
 - **When you change a script:** add or update its test in the same pull request. A fix to `land` comes with a test
   that fails without it, like the `AUD-land-sha-no-fijado` regression in `land.test.ts`.
+- **Conformance checker:** `node --test 'scripts/*.test.mjs'` runs `scripts/check-conformance.mjs` (the mechanical half of
+  `/swarm:adopt --check`) against throw-away repositories built from `templates/`; change a §6 check and its test together.
 - **Type-check** (optional, needs `typescript` and `@types/node`): `npx tsc --noEmit --allowImportingTsExtensions
   --module nodenext --target es2023 --strict --noUncheckedIndexedAccess --skipLibCheck --types node <files>`.
 

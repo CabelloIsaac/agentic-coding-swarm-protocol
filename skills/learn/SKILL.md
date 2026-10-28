@@ -56,7 +56,8 @@ the ones that hold are the ones a gate checks (chapter 11, chapter 18 §d).
    Anonymize: no customer data, secrets, private code or internal names (CONTRIBUTING.md ground rule 5). **Show the
    full draft to the user and stop.** Send it only after an explicit "yes, send it", with
    `gh issue create --repo AntoniArco/agentic-coding-swarm-protocol --title "<title>" --body-file <file>`, and
-   report the URL. No confirmation → leave the draft in the scratchpad and give its path.
+   report the URL. No confirmation → leave the draft in a temp dir outside the repo (the agent's scratchpad if it
+   has one) and give its path.
 7. **Verify** what you wrote in the project: `verifyQuick` from `swarm.json` (and show the new test failing on the
    old behavior when the mechanism is a test, as in `tdd`).
 

@@ -53,6 +53,16 @@ secrets: if a gate needs credentials to pass, the test is badly designed.
 - One responsibility per function. Comments explain why. No commented-out code and no `console.log`.
 - TODOs carry context; if it is real work, it is a change.
 
+## Anti-patterns
+
+Practices that caused a real failure here, one row each, so the next person does not repeat them. Add a row when an
+incident teaches a rule (the `learn` skill writes it in this format); every row names its mechanism or says
+`preference`.
+
+| Practice | Symptom | Instead | Evidence | Mechanism |
+| --- | --- | --- | --- | --- |
+| `<practice, as the thing someone did>` | `<what was observed>` | `<the practice to follow>` | `<incident: date, commit or audit id>` | `<path, or preference>` |
+
 ## Reviews
 
 The full schedule is in the playbook (chapter 15): independent review per non-trivial change, security review on

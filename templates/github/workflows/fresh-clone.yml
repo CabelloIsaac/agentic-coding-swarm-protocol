@@ -5,7 +5,9 @@
 # Read-only token, no persisted git credentials, no secrets: if setup needs a secret, the setup is wrong.
 # Caches are excluded on purpose: a cache is exactly where a missing setup step hides.
 # The runtime below is the only prerequisite the README may list; adapt it to your stack (INTEGRATION.md §4).
-# Pin every action to a full commit SHA in your repo (and let Dependabot bump them); tags are mutable.
+# Pin actions: keep `@vN` while adapting; before adopting, replace each tag with its full commit SHA, e.g.
+#   gh api repos/actions/checkout/git/ref/tags/v4.2.2 --jq .object.sha   (and let Dependabot bump them).
+# Tags are mutable, SHAs are not.
 name: fresh-clone
 on:
   schedule:

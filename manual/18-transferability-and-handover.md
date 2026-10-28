@@ -46,6 +46,16 @@ on a temporary branch inside the runner, with a read-only token and no persisted
 agent, then runs `verify` and the acceptance command. **The output is a report, never a merge**: the verdict, the
 diff, and the agent's own list of what it could not find, what was ambiguous and what it would have asked a person.
 
+The judge does not trust what the agent could edit: it reads the acceptance command and `commands.verify` from the
+base commit, and the verdict fails if the agent's diff touches `swarm.json`, `docs/handover/`, `.github/` or
+`quality-ratchets.json`. Otherwise an agent, or instructions injected through repo content, could set both commands to
+`true` and obtain a pass.
+
+**Residual risk.** The agent needs `verify` during its run, so it executes project commands with the API key in the
+environment of that step; any project script can read it. The workflow keeps the key on the `claude` step only and
+gives the judge none, but it cannot remove the exposure. Use a dedicated key with a spend cap set in the Anthropic
+console and rotate it monthly. The same applies to the weekly review workflow (chapter 15).
+
 If it fails, the project depends on knowledge that is in nobody's files.
 
 ### Why this is the most realistic absorption test
@@ -97,12 +107,12 @@ places: a lesson that matters goes into the repo through the `learn` skill.
 ## (e) Handover checklist
 
 When a project changes team, the outgoing team delivers and the receiving team verifies, item by item, with
-[checklists/handover.md](../checklists/handover.md): access and secrets transferred and rotated, the T-checks green,
+[checklists/handover.md](../checklists/handover.md): access and secrets transferred and rotated, the X-checks green,
 open work and known debt walked through, and **a joint session in which the receiving team's agent does the
 reference task live**, with the outgoing team watching and answering only what the docs do not. Every question asked
 in that session becomes a docs fix before the handover is signed off.
 
-The handover ends with a date, both team names and the T-check output in an ADR, so the next team knows when and
+The handover ends with a date, both team names and the X-check output in an ADR, so the next team knows when and
 how the project arrived.
 
 ## How it fits with the rest

@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { countEscapes, countRules, detection, isMetricNoise } from '../scripts/audit.ts';
+import { countEscapes, countRules, detection, isMetricNoise, landActivity } from '../scripts/audit.ts';
 
 describe('audit: metric hygiene', () => {
   it('the playground and the audit script itself are noise, the product is not', () => {
@@ -53,5 +53,20 @@ describe('audit: detection latency', () => {
     assert.equal(d.findings[2]?.latency_days, undefined);
     assert.equal(d.median_latency_days, 14);
     assert.equal(d.escape_rate, 0.67);
+  });
+});
+
+describe('audit: land log', () => {
+  it('counts landed, conflict and review-bypassed entries since the previous snapshot, so bypasses reach the audit', () => {
+    const lines = [
+      JSON.stringify({ at: '2026-10-10T08:00:00Z', result: 'landed' }),
+      JSON.stringify({ at: '2026-10-20T08:00:00Z', result: 'landed' }),
+      JSON.stringify({ at: '2026-10-21T08:00:00Z', result: 'review-bypassed', reason: 'hotfix' }),
+      JSON.stringify({ at: '2026-10-22T08:00:00Z', result: 'conflict' }),
+      JSON.stringify({ at: '2026-10-22T09:00:00Z', result: 'failed' }),
+      'not json',
+    ];
+    assert.deepEqual(landActivity(lines), { landed: 2, conflict: 1, review_bypassed: 1 });
+    assert.deepEqual(landActivity(lines, '2026-10-20'), { landed: 1, conflict: 1, review_bypassed: 1, since: '2026-10-20' });
   });
 });

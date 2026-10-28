@@ -2,7 +2,10 @@
 # If a gate needs credentials to pass, the test is badly designed.
 # Every job beyond `quality` must say, in its comment, why it is not in local verify (needs a service, Docker, minutes).
 # No step in the gate path may use `continue-on-error`: a gate that cannot fail is not a gate.
-# Pin every action to a full commit SHA in your repo (tags are mutable); pnpm comes from corepack, not a third-party action.
+# Pin actions: keep `@vN` while adapting; before adopting, replace each tag with its full commit SHA, e.g.
+#   gh api repos/actions/checkout/git/ref/tags/v4.2.2 --jq .object.sha   (and let Dependabot bump them).
+# Tags are mutable, SHAs are not.
+# pnpm comes from corepack, not a third-party action.
 name: ci
 on:
   push:
@@ -44,6 +47,36 @@ jobs:
         with:
           name: coverage
           path: coverage/
+
+  # Secret scan: the mechanism behind "never commit secrets" in CLAUDE.md (the settings.json deny rules only stop the
+  # agent from reading .env files). Scans the full history of the push or pull request. It runs the gitleaks CLI from
+  # a fixed release with a verified checksum instead of the third-party action: no token, no license key, no secret
+  # reaches code this repo does not control. To upgrade: pick a release on github.com/gitleaks/gitleaks/releases,
+  # copy the linux_x64 line from its checksums file, and update the two values below.
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (fixed release, checksum verified)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -eu
+          curl -sSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks gitleaks.tar.gz
+      - name: Scan history for secrets
+        run: gitleaks git --redact --no-banner --exit-code 1 .
 
   # ---------------------------------------------------------------------------------------------------------------
   # Optional extra jobs. Uncomment the ones that apply. Each runs something local verify cannot run cheaply; make it

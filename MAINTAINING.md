@@ -54,7 +54,13 @@ so; otherwise it is minor or major by the table above.
 - [ ] Every change since the last release has a `CHANGELOG.md` entry under `Unreleased`, in Keep a Changelog
       sections (Added, Changed, Fixed, Removed, Security), each saying **what a project must do**, if anything.
 - [ ] A major has a `### Migration` section: the exact steps and the `--check` that proves them.
-- [ ] `node scripts/check-links.mjs` and `claude plugin validate .` pass.
+- [ ] `node scripts/check-links.mjs`, `node scripts/check-evals.mjs`, `claude plugin validate .`,
+      `node --test 'reference/self-test/*.test.ts'` and `node --test 'scripts/*.test.mjs'` pass.
+- [ ] Before a minor: a fresh-eyes audit of this repository by an agent with no prior context (coherence,
+      agent operability, mechanisms vs claims, security of what adopters copy, "would it make a difference"),
+      and a pilot adoption by an agent WITHOUT the plugin on a repository of another stack, with its friction log.
+      Both found in 0.3.0 what the self-tests could not (ratchets loosened by hand, hooks wired twice, levels
+      that disagreed).
 - [ ] The pilot (§7) ran this version for at least a week, with its `--check` output attached to the release PR.
 - [ ] `version` bumped in `.claude-plugin/plugin.json`, the template `templates/swarm.json`, and the examples in
       `INTEGRATION.md`.
@@ -117,7 +123,7 @@ another team after release (target: never).
 Every project already produces the inputs: its audit report (manual [chapter 09](manual/09-periodic-audit.md)) with
 the "Protocol vs project" section, and `/swarm:adopt --check` output. The owner collects them monthly in one table:
 
-| Team · project | Protocol version | Level | Protocol score | T-checks | Detection latency (median days) | Lands without conflict | Integration-branch CI failures |
+| Team · project | Protocol version | Level | Protocol score | X-checks | Detection latency (median days) | Lands without conflict | Integration-branch CI failures |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `<team · repo>` | `0.3.0` | 2 | 21/21 | 4/5 | 3 | 96 % | 0 |
 

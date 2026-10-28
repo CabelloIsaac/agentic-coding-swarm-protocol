@@ -1,6 +1,6 @@
 {
   "protocol": "swarm",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "level": 0,
   "integrationBranch": "main",
   "commands": {
@@ -38,6 +38,7 @@
       "**/architecture.test.*",
       "**/docs.test.*",
       "biome.json",
+      "quality-ratchets.json",
       "pnpm-lock.yaml"
     ]
   }

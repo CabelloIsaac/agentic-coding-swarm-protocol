@@ -289,6 +289,7 @@ const defaults: Config = {
       '**/architecture.test.*',
       '**/docs.test.*',
       'biome.json',
+      'quality-ratchets.json',
       'pnpm-lock.yaml',
     ],
   },

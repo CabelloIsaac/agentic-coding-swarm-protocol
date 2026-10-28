@@ -42,6 +42,10 @@ claude plugin marketplace add AntoniArco/agentic-coding-swarm-protocol
 claude plugin install swarm@agentic-coding-swarm-protocol
 ```
 
+Version check: an agent with the plugin reads `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`. An agent without
+the plugin has no `${CLAUDE_PLUGIN_ROOT}`; it reads `.claude-plugin/plugin.json` of its own checkout of the
+protocol repo. Either way, that `version` is what goes into `swarm.json`.
+
 Check it: `/plugin` lists `swarm` as enabled, the skills appear as `/swarm:<skill>`,
 and `/context` shows only their descriptions, not their bodies. The hooks do nothing in a repo that has not adopted
 the protocol (no `swarm.json` at its root), so installing it globally is safe. What a project must expose (commands,
@@ -62,6 +66,10 @@ So that everyone who opens the project gets it, commit this to the project's `.c
   "enabledPlugins": { "swarm@agentic-coding-swarm-protocol": true }
 }
 ```
+
+The same blocks are already in `templates/claude/settings.json`. Without the plugin, use
+`templates/claude/settings.no-plugin.json` instead: it wires the session hooks that the plugin would otherwise run
+from `swarm.json`, and the two files must never be combined, or the hooks run twice.
 
 Claude Code offers to install it to anyone who trusts the project folder. To enforce it across a company, use
 managed settings with the marketplace allowed and the plugin forced on. Pin versions: the plugin carries a

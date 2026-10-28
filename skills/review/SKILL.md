@@ -1,7 +1,7 @@
 ---
 name: review
 description: Gets an independent review of a finished branch by dispatching the read-only reviewer agent, plus the security-reviewer agent when the diff touches sensitive paths, checks the diff against the defect-class catalog, verifies and triages every finding, and writes the review receipt that land requires. Use after any non-trivial change (more than one logic file, or anything in the core) and before land, when the user asks for a review or a second look, or when a diff touches auth, sessions, secrets, external input, personal data, external effects, LLM tools or prompts, CI workflows or dependencies.
-argument-hint: "[base-ref, default main]"
+argument-hint: "[base-ref, default: the integration branch]"
 allowed-tools: Bash(git diff *) Bash(git log *) Bash(git merge-base *) Bash(git rev-parse *) Bash(git status *) Bash(git patch-id *) Bash(mkdir -p *) Bash(node *review-receipt.ts *)
 ---
 
@@ -32,7 +32,8 @@ ignore style; fixing everything produces needless abstractions (chapter 15).
 ## Steps
 
 1. **Scope the diff.**
-   - `base=$(git merge-base main HEAD)`; `git diff --stat $base...HEAD`; `git log --oneline $base..HEAD`.
+   - `base=$(git merge-base <integration> HEAD)`, where `<integration>` is the integration branch from `swarm.json`
+     (`integrationBranch`, default `main`); `git diff --stat $base...HEAD`; `git log --oneline $base..HEAD`.
    - Trivial (see above) → stop and report "review skipped: <reason>". If `review.mode` still covers it (mode
      `always`, or a sensitive path), say that land needs `--no-review "<reason>"` for it.
    - Sensitive if any changed path or hunk touches: auth and sessions; secrets and configuration; external input
@@ -67,24 +68,34 @@ ignore style; fixing everything produces needless abstractions (chapter 15).
    non-trivial. List dismissed findings with their reasons in the commit body. Commit everything: the receipt is
    keyed by the committed diff, so uncommitted work is not covered.
 
-6. **Write the receipt**, last, on the committed branch. `verdict` is `pass` only when every High is fixed (or
-   accepted in writing by a person, quoted in the commit body) and `open_high` is 0; otherwise write
-   `changes_requested` with the count, which land refuses. In a Node project with the reference scripts:
-   `node scripts/review-receipt.ts write --reviewers reviewer,security-reviewer --verdict pass --open-high 0`.
-   In any stack, the same file with git and printf (`<integration>` from `swarm.json`, default `main`):
+6. **Write the report, then the receipt**, last, on the committed branch. The receipt names reviewers the author
+   session typed, so on its own a `pass` is indistinguishable from a review that never happened; the **report** is
+   what gives it weight. Write the full report to `<git-common-dir>/swarm-reviews/<patch_id>.md` (at least 200
+   bytes): the agents dispatched, each one's verdict, every finding with its DC id and how you triaged it (fixed,
+   recorded, dismissed with the reason), and the verify evidence after the fixes (the Report block below, expanded).
+   The receipt stores the report's sha256 and size, and `land` refuses a receipt whose report is missing or was
+   edited. `verdict` is `pass` only when every High is fixed (or accepted in writing by a person, quoted in the
+   commit body) and `open_high` is 0; otherwise write `changes_requested` with the count, which land refuses. In a
+   Node project with the reference scripts, after writing the report anywhere:
+   `node scripts/dev/review-receipt.ts write --report <report.md> --reviewers reviewer,security-reviewer --verdict pass --open-high 0`.
+   In any stack, with git and printf (`<integration>` from `swarm.json`, default `main`):
 
    ```sh
    base=main
    id=$(git diff --no-color --no-ext-diff "$base...HEAD" | git patch-id --stable | cut -d' ' -f1)
    dir="$(git rev-parse --git-common-dir)/swarm-reviews"; mkdir -p "$dir"
-   printf '{"patch_id":"%s","base":"%s","head":"%s","reviewers":["reviewer","security-reviewer"],"verdict":"pass","open_high":0,"at":"%s"}\n' \
-     "$id" "$(git rev-parse "$base")" "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/$id.json"
+   # 1. the report: write it to "$dir/$id.md" now (file-writing tool or heredoc), then hash it
+   sum=$(sha256sum "$dir/$id.md" 2>/dev/null || shasum -a 256 "$dir/$id.md"); sum=${sum%% *}
+   bytes=$(wc -c < "$dir/$id.md" | tr -d ' ')
+   # 2. the receipt
+   printf '{"patch_id":"%s","base":"%s","head":"%s","reviewers":["reviewer","security-reviewer"],"verdict":"pass","open_high":0,"at":"%s","report_sha256":"%s","report_bytes":%s}\n' \
+     "$id" "$(git rev-parse "$base")" "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sum" "$bytes" > "$dir/$id.json"
    ```
 
-   An empty `id` means there is no committed change to review. The receipt lives in git's common directory: local,
-   shared by the clone's worktrees, never committed. It survives a squash and land's own rebase (the patch id
+   An empty `id` means there is no committed change to review. The receipt and report live in git's common
+   directory: local, shared by the clone's worktrees, never committed. It survives a squash and land's own rebase (the patch id
    hashes the change, not the commits); a new commit, or an integration-branch edit next to your hunks, needs a new
-   review. Never write a receipt for a review that did not happen: `land --no-review "<reason>"` is the honest
+   review. Never write a receipt (or a report) for a review that did not happen: `land --no-review "<reason>"` is the honest
    escape hatch, and it is logged.
 
 ## Red flags

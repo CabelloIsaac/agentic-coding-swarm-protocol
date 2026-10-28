@@ -32,7 +32,7 @@ log files verify writes would otherwise appear as "uncommitted change(s) appeare
 | `reference/scripts/adr.ts` | `adr` — conflict-free decision records |
 | `reference/scripts/roadmap.ts` | `roadmap` — derived status |
 | `reference/scripts/audit.ts` | `audit` — deterministic debt metrics |
-| `reference/scripts/ratchets.ts` | Quality ratchets — file size, coverage floor gap, lint budget (`check`, `--size-only`, `--tighten`, `--init`) |
+| `reference/scripts/ratchets.ts` | Quality ratchets — file size, coverage floor gap, lint budget (`check` also fails on any loosening of the file against the integration branch, `--size-only`, `--tighten`, `--init`) |
 | `reference/scripts/playground.ts` | Sandbox for throw-away experiments (`playground:new`) |
 | `reference/scripts/test-tmp.ts`, `reference/scripts/vitest-setup.ts`, `reference/scripts/vitest-global-setup.ts`, `reference/tests/cleanup-tmp.ts`, `reference/tests/sequencer.ts` | Test infrastructure |
 | `reference/scripts/gitignore.test.ts` | Test infrastructure (caches must be ignored, or `wip:` commits swallow them) |
@@ -148,28 +148,38 @@ branch and open a PR with auto-merge; the merge queue runs the full gate and num
 **Purpose:** make the per-change review a gate of `land`, bound to the exact change that was reviewed.
 
 - **Receipt** (INTEGRATION.md §1): `{"patch_id", "base", "head", "reviewers": [], "verdict": "pass" |
-  "changes_requested", "open_high", "at"}`, one JSON file per change at `<git-common-dir>/swarm-reviews/<patch_id>.json`.
-  Local to the clone, shared by its worktrees, never committed.
+  "changes_requested", "open_high", "at", "report_sha256", "report_bytes"}`, one JSON file per change at
+  `<git-common-dir>/swarm-reviews/<patch_id>.json`. Local to the clone, shared by its worktrees, never committed.
+- **Report:** the review skill saves its full report (agents dispatched and their verdicts, findings with DC ids,
+  triage) at `<git-common-dir>/swarm-reviews/<patch_id>.md`. The names in a receipt are typed by the session that wants
+  to land, so the report is what makes a `pass` more than an assertion: `write` requires it (`--report <path>`,
+  copied next to the receipt when elsewhere), refuses a missing one or one under 200 bytes, and stores its sha256 and
+  size; `check` recomputes both and refuses a receipt whose report is missing or was edited. It cannot prove a review
+  happened, only that a document exists that an audit or a reviewer can read and challenge.
 - **Key:** `git diff --no-color --no-ext-diff <integration>...HEAD | git patch-id --stable`, first field. It hashes
   the change, not the commits: stable across `--squash` and a clean rebase, new for any further edit. If the
   integration branch edits the context lines around a hunk, the id changes and the change is reviewed again.
 - **Writing:** the `review` skill writes it after triage and fixes, on the committed branch, with a documented
-  git + `printf` sequence (any stack) or `review-receipt.ts write --reviewers <a,b> --verdict <v> --open-high <n>`.
+  git + `printf` sequence (any stack) or `review-receipt.ts write --report <path> --reviewers <a,b> --verdict <v>
+  --open-high <n>`.
   `write` refuses an empty change and a `pass` with `open_high > 0`.
 - **Config:** `review.mode` is `always`, `sensitive` or `off`; `review.sensitive` is a list of globs (`**` any depth,
   `*` one segment, `?` one character; a pattern without `/` matches the basename at any depth). Read from
-  `swarm.json` **on the integration branch** (`git show <integration>:swarm.json`), so a branch cannot relax its own
-  gate; without it, from the config file. The template default is `sensitive`, with globs for auth and sessions,
+  `swarm.json` **on the integration branch**, from `<remote>/<integration>` when that ref exists (the published copy:
+  a direct commit on the local branch cannot relax the gate) and from the local branch otherwise, so a branch cannot
+  relax its own gate; without it, from the config file. The template default is `sensitive`, with globs for auth and sessions,
   payments and billing, migrations and SQL, CI and git hooks, agent settings (`.claude/**`), `swarm.json`, the dev
   tooling, the test, coverage and lint configuration, the architecture and docs tests, and the lockfile.
 - **Check** (`reviewGate`, also `review-receipt.ts check`): `off` → pass. `sensitive` with no changed path
   (`git diff --name-only --no-renames <integration>...HEAD`) matching → pass, not required. Otherwise, required: the
   receipt for the current patch id must exist, parse, say `pass` and have `open_high: 0`; anything else fails with
-  the action to take. An empty change needs no receipt.
+  the action to take; the report must exist, be at least 200 bytes and hash to `report_sha256`. An empty change needs
+  no receipt.
 - **Tests** (`reference/self-test/review-receipt.test.ts`, `node --test`): patch id stable across a rebase and new
   after an edit; sensitive vs always vs off; missing and `changes_requested` receipts block; the branch's own
   `swarm.json` cannot switch the gate off; land refuses without a receipt and lands with one after rebasing; the
-  `--no-review` reason is required and logged.
+  `--no-review` reason is required and logged; a receipt needs its report (missing, tiny and edited reports are
+  refused); a loosened local `swarm.json` with a strict remote one still blocks.
 
 **PR mode:** the equivalent is a required review on protected paths (`CODEOWNERS` with the sensitive globs) plus
 branch protection; the receipt is then the review approval on the pull request.

@@ -24,6 +24,17 @@ Why: a test you never saw fail may not test anything. Agent-written tests tend t
 - You do not yet know what is wrong: use the `debug` skill to find the root cause, then come back here to write
   the reproduction.
 
+## Commands by stack
+
+| To | Vitest | pytest | go test | cargo test |
+| --- | --- | --- | --- | --- |
+| Run one test | `pnpm vitest run <file> -t "<name>"` | `pytest <file>::<test>` | `go test ./<pkg> -run '^<Test>$'` | `cargo test <name>` |
+| Run one file | `pnpm vitest run <file>` | `pytest <file>` | `go test ./<pkg>` | `cargo test --test <file>` (integration) or `cargo test <module>::` |
+| Coverage | `pnpm test:coverage` | `pytest --cov` | `go test -cover ./...` | `cargo llvm-cov` |
+
+The repo's own single-test command (`CLAUDE.md`) wins over this table. The `allowed-tools` line above lists the
+Vitest and `verify` commands; add the one for your stack in the project's settings.
+
 ## Steps
 
 ```
@@ -40,7 +51,7 @@ Why: a test you never saw fail may not test anything. Agent-written tests tend t
    no sleep, under a second whenever possible.
 
 2. **RED.** One test, one behavior, a name that states it. Run only that test with the repo's single-test command
-   (see its `CLAUDE.md`; the default stack uses `pnpm vitest run <file> -t "<test name>"`, shown below). Read the failure. It must be the assertion you expect
+   (see its `CLAUDE.md`; the table below has the common stacks, and the examples use Vitest). Read the failure. It must be the assertion you expect
    (`expected 10.01, received 10`), **not** an import error, a typo, a missing fixture or a timeout. If it fails for
    another reason, fix the test and rerun. If it **passes** right away, the test does not reach the bug or the bug
    is elsewhere: go back to `debug`.

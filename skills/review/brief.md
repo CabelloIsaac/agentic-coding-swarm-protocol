@@ -28,6 +28,7 @@ Ignore style.
 
 Output, per finding: [DC id if one fits] · file:line · problem · concrete failure scenario · proposed fix ·
 confidence. Only findings you would bet on. If everything holds, one line with the commands you ran and their results.
+The review skill saves your output verbatim in the review report that backs the receipt: keep it self-contained.
 ```
 
 ## security-reviewer

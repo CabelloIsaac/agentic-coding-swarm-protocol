@@ -8,7 +8,7 @@ Project: `<name>` · From: `<team>` · To: `<team>` · Planned date: `<YYYY-MM-D
 
 ## 1. Before the session (outgoing team)
 
-- [ ] `/swarm:adopt --check transfer` green, output pasted below. Any red T-check is fixed first, not explained.
+- [ ] `/swarm:adopt --check transfer` green, output pasted below. Any red X-check is fixed first, not explained.
 - [ ] Fresh-clone workflow green in the last 7 days (X1).
 - [ ] New-agent test report under 30 days old with verdict `pass`, and every gap it listed fixed (X2).
 - [ ] `.github/CODEOWNERS` lists the receiving team's handles (merged, not pending), and Code Owners review is
@@ -46,7 +46,7 @@ Project: `<name>` · From: `<team>` · To: `<team>` · Planned date: `<YYYY-MM-D
       in a change merged by the receiving team.
 - [ ] Every secret rotated by the receiving team (runbook § Secrets and rotation); old credentials revoked.
 - [ ] Outgoing team members removed from CODEOWNERS and from access they no longer need.
-- [ ] A handover ADR: date, both teams, the T-check output, open debt accepted, and what was learned.
+- [ ] A handover ADR: date, both teams, the X-check output, open debt accepted, and what was learned.
 - [ ] Next new-agent test run green under the new owners.
 
 ## Sign-off
@@ -56,7 +56,7 @@ Project: `<name>` · From: `<team>` · To: `<team>` · Planned date: `<YYYY-MM-D
 | Outgoing owner | | | |
 | Receiving owner | | | |
 
-T-check output:
+X-check output:
 
 ```text
 <paste /swarm:adopt --check transfer>
