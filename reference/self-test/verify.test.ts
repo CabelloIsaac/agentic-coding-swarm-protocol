@@ -28,7 +28,10 @@ describe('verify', () => {
     });
     const r = fx.run('verify');
     assert.equal(r.status, 0, r.out);
-    assert.deepEqual(stepLines(r.stdout).map((l) => l.replace(/ \(\d+s\).*$/, '')), ['✓ lint', '✓ types', '✓ tests']);
+    // lint and types run in parallel, so their completion order varies between machines; the serial step is last
+    const lines = stepLines(r.stdout).map((l) => l.replace(/ \(\d+s\).*$/, ''));
+    assert.deepEqual(lines.slice(0, 2).sort(), ['✓ lint', '✓ types']);
+    assert.equal(lines[2], '✓ tests');
     assert.match(r.stdout, /✓ all green/);
     assert.equal(readFileSync(join(fx.wt, 'tmp/verify/lint.log'), 'utf8'), 'lint ok\n');
     assert.equal(readFileSync(join(fx.wt, 'tmp/verify/tests.log'), 'utf8'), 'tests ok\n');
