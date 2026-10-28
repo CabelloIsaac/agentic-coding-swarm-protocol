@@ -1,0 +1,190 @@
+# Integration contract
+
+What a project must expose so that the Swarm Protocol plugin, its skills, its agents and any other coding agent can
+operate in it. This is the single source of truth for that interface: skills and agents point here instead of
+assuming a stack.
+
+**Rule:** a repository has adopted the protocol if and only if it has a valid `swarm.json` at its root. Everything an
+agent runs (verify, land, commit, hooks) is resolved from that file, never guessed.
+
+## 1. The manifest: `swarm.json`
+
+```json
+{
+  "protocol": "swarm",
+  "version": "0.1.0",
+  "level": 2,
+  "integrationBranch": "main",
+  "commands": {
+    "verify": "pnpm verify",
+    "verifyQuick": "pnpm verify --quick",
+    "commit": "pnpm wt:commit",
+    "status": "pnpm wt:status",
+    "land": "pnpm land",
+    "newAdr": "docs/adr/draft-<slug>.md",
+    "audit": "pnpm audit:repo"
+  },
+  "hooks": {
+    "sessionStart": "node scripts/dev/wt.ts setup",
+    "stop": "node scripts/dev/wt.ts wip"
+  },
+  "gates": ["*/vitest.config.*", "*/architecture.test.*", "*/docs.test.*", "*/scripts/dev/*"]
+}
+```
+
+Template: [templates/swarm.json](templates/swarm.json). The `adopt` skill writes it at level 0 and raises `level` only
+after the conformance checks for that level pass (§6).
+
+| Key | Required from | Meaning |
+|---|---|---|
+| `protocol`, `version` | level 0 | Always `"swarm"`; the protocol version the project follows. A plugin refuses to act on a newer major. |
+| `level` | level 0 | Highest level whose conformance checks pass. Never set by hand. |
+| `integrationBranch` | level 0 | `main` unless stated. |
+| `commands.verify` | level 1 | The full gate. |
+| `commands.verifyQuick` | level 1 | The fast, change-scoped gate. |
+| `commands.commit`, `commands.status`, `commands.land` | level 2 | Session commit, session overview, serialized integration (or PR creation in PR mode). |
+| `hooks.sessionStart`, `hooks.stop` | level 2 | Run by the plugin hooks (§3). Optional for teams whose agents have no hooks; then §5 applies. |
+| `commands.newAdr` | level 2 | A command, or a path pattern for draft ADRs. |
+| `commands.audit` | level 3 | Offline debt metrics. |
+| `gates` | optional | Extra file globs whose edits trigger the quality-gate warning. |
+
+Missing keys fall back to the defaults in the template (Node and pnpm). A skill that uses a fallback says so in its
+output, so a non-Node project notices immediately.
+
+## 2. What each command must guarantee
+
+The names are free; the behaviour is the contract. Every guarantee below is something a skill relies on.
+
+| Command | Must | Must never |
+|---|---|---|
+| `verify` | Run exactly what CI runs. Exit 0 if and only if every step is green. Print one line per step and the tail of each failure; keep full logs on disk and print their path. | Pass with a skipped, retried or "known flaky" step, unless the tolerance is a documented exact signature. |
+| `verifyQuick` | Run the steps affected by the diff against the integration branch, plus the structural tests. Finish in seconds to a few minutes. | Be accepted as the gate that closes a task. |
+| `commit` | Absorb a pending `wip:` commit and commit everything with the given message. | Push. |
+| `status` | List worktrees and branches with unintegrated work, dirty state and age. | Change anything. |
+| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, run full `verify`, fast-forward, publish, log the attempt. On any failure leave the integration branch untouched and exit non-zero with the reason. | Resolve conflicts, merge histories, or force-push. |
+| `audit` | Run offline with no spend, print metrics, optionally store a snapshot for deltas. | Fix anything. |
+| `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
+| `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout or during a rebase or merge. |
+
+The reference implementation of every command is specified in [reference/README.md](reference/README.md), with code
+in `reference/scripts/`.
+
+## 3. Plugin hooks
+
+The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swarm-hook.sh), all exit 0 always:
+
+- **SessionStart** runs `hooks.sessionStart` from `swarm.json`.
+- **Stop** runs `hooks.stop`.
+- **PreToolUse (Edit/Write)** warns, without blocking, when a file matching a quality-gate glob is edited: the
+  defaults plus `gates` from `swarm.json`.
+
+In a repository without `swarm.json` the hooks do nothing (a legacy fallback still recognises
+`scripts/dev/wt.ts`), so installing the plugin globally is safe. They read JSON with `jq`, `node` or `python3`,
+whichever exists first. The hook commands come from the project's own committed file, under the same trust as its
+`.claude/settings.json`: review changes to `swarm.json` like any other change to the build.
+
+## 4. Stack equivalents
+
+The workflow tooling (`land`, `wt`, ADR numbering) only needs git and Node 24 and works as a dev tool in any stack;
+or port it from the specification. The gate itself uses the stack's native tools:
+
+| Stack | Lint | Types | Tests + coverage floor | Quick (affected only) | Architecture rules |
+|---|---|---|---|---|---|
+| TypeScript (pnpm) | Biome or ESLint | `tsc --noEmit` | Vitest with `coverage.thresholds` | `vitest run --changed <branch>` | import-graph test, dependency-cruiser |
+| Python (uv / Poetry) | `ruff check` | `mypy` or `pyright` | `pytest --cov --cov-fail-under=<N>` | `pytest --testmon`, or tests under changed paths | import-linter contracts |
+| Go | `golangci-lint run` | the compiler, `go vet` | `go test -race -coverprofile` + a coverage-floor check | `go test` on changed packages and their dependents | arch-go, or a test over `go list -deps` |
+| Rust | `cargo clippy -- -D warnings` | `cargo check` | `cargo llvm-cov --fail-under-lines <N>` | `cargo test -p <changed crates>` | module visibility, cargo-deny for dependencies |
+| JVM (Gradle) | Spotless or Checkstyle | the compiler | `gradle check` with JaCoCo violation rules | `:<module>:test` for changed modules | ArchUnit |
+| Anything | `make lint` | `make typecheck` | `make test` | `make test-changed` | a test in the project's own test runner |
+
+Wrap the steps in one entry point (`make verify`, `just verify`, `tox -e verify`, a script) and put that in
+`commands.verify`. The docs test (links, cited paths, structure in its index) is stack-independent: a
+small script in any language.
+
+## 5. Agents without hooks or plugins
+
+Codex, Cursor, Aider, CI runners and anything else that does not load Claude Code plugins get the same protocol
+through files: they read `AGENTS.md`, and the project's `AGENTS.md` (template:
+[templates/AGENTS.md](templates/AGENTS.md)) states the session protocol they must follow by hand:
+
+1. **Start:** work in a dedicated worktree and branch (`git worktree add ../<repo>-<task> -b <task>`), then run
+   `hooks.sessionStart` yourself.
+2. **Iterate:** `verifyQuick` after each meaningful change.
+3. **Before stopping, every time:** commit (there is no `wip:` safety net without the Stop hook), with
+   `Assumption: <what> — <why>` trailers for decisions taken without asking.
+4. **Finish:** full `verify`, an independent review (the prompts in `agents/` work as plain system prompts), then
+   `land` or a PR.
+
+Keep one source of rules: `AGENTS.md` either points to `CLAUDE.md` or is a symlink to it.
+
+## 6. Conformance checks
+
+`/swarm:adopt --check [level]` runs these checks, reports each one as pass or fail with its evidence, and changes
+nothing. A level is adopted only when it and every level below it pass. Agents without the plugin can run the same
+list by hand.
+
+| Id | Check | Pass when |
+|---|---|---|
+| L0.1 | Manifest | `swarm.json` parses; `protocol`, `version`, `level` present. |
+| L0.2 | Agent memory | `CLAUDE.md` exists, is under 200 lines and names the verify command. |
+| L0.3 | Secrets | `.claude/settings.json` denies reading `.env*` and secret files. |
+| L0.4 | Local files ignored | `git check-ignore CLAUDE.local.md .claude/settings.local.json` matches both. |
+| L0.5 | Decision log | `docs/adr/` holds at least the adoption ADR. |
+| L1.1 | Full gate | `commands.verify` exits 0 on a clean checkout of the integration branch. |
+| L1.2 | Quick gate | `commands.verifyQuick` exits 0 and is faster than the full gate. |
+| L1.3 | CI parity | the CI workflow runs `commands.verify` or exactly its steps. |
+| L1.4 | Coverage floor | a threshold is configured and enforced by the test step. |
+| L1.5 | No secrets in CI | the quality job reads no secrets. |
+| L2.1 | Worktrees | the worktree directory is gitignored; the session start hook or §5 step 1 is documented. |
+| L2.2 | Session commands | `commands.commit`, `status` and `land` resolve to existing scripts. |
+| L2.3 | Protected integration | a `pre-push` publisher guard is installed (`git config core.hooksPath`) or branch protection is on. |
+| L2.4 | Invariants as tests | an architecture test exists and runs inside `verify`. |
+| L2.5 | Docs as tests | a docs test exists and runs inside `verify`. |
+| L2.6 | Non-Claude agents | `AGENTS.md` exists and states the §5 session protocol, or points to `CLAUDE.md` which does. |
+| L3.1 | Roadmap | a roadmap file exists and its validator runs inside `verify`. |
+| L3.2 | Audit | `commands.audit` runs offline and exits 0. |
+| L3.3 | Fresh audit | the latest audit report is under 14 days old. |
+| L3.4 | Scheduled review | a scheduled review exists (CI workflow or a `/schedule` routine named in `CLAUDE.md`). |
+| L3.5 | Conflict-free ADRs | new ADRs are drafts numbered at integration time. |
+
+Output format:
+
+```text
+swarm check · level 1 · protocol 0.1.0
+✓ L0.1 Manifest            swarm.json ok (level 0)
+✓ L0.2 Agent memory        CLAUDE.md 142 lines, names "make verify"
+✗ L1.3 CI parity           .github/workflows/ci.yml runs "pytest" but not "make verify"
+result: level 0 conformant; level 1 blocked by L1.3
+```
+
+## 7. Worked examples
+
+**Adopting in a Python service** (one level per session, `/clear` between them):
+
+```text
+> /swarm:adopt 0 --plan
+  stack: Python 3.12 (uv), pytest, ruff; CI: GitHub Actions; scenario D (team reviews by PR)
+  will write: swarm.json (verify = "make verify"), CLAUDE.md (merged with the existing one), .claude/settings.json,
+              docs/adr/draft-adopt-agentic-coding-swarm-protocol.md
+  will not adopt: local land (PR mode instead), pre-push publisher (branch protection instead)
+> /swarm:adopt 0            → files written, /swarm:adopt --check 0 all green, one commit
+> /swarm:adopt 1            → Makefile verify target, CI calls it, coverage floor at measured − 1, --check 1 green
+> /swarm:adopt 2            → worktrees, PR-mode land, import-linter contracts, docs test, AGENTS.md, --check 2 green
+```
+
+**A daily session in an adopted repo:**
+
+```text
+claude -w fix-invoice-rounding          # own worktree; sessionStart hook installs deps, assigns ports
+… write the failing test, fix, verifyQuick …
+/swarm:verify                           # full gate, evidence in the reply
+reviewer agent                          # independent review of the diff
+/swarm:land                             # serialized integration, or a PR in PR mode
+```
+
+## 8. Versioning
+
+`swarm.json` carries the protocol version the project follows; the plugin carries its own in
+`.claude-plugin/plugin.json`. Minor versions add checks or optional keys; a major version may change a command's
+guarantees and ships with a migration note in [CHANGELOG.md](CHANGELOG.md). `/swarm:adopt --check` reports when the
+project's protocol version is behind the plugin's.

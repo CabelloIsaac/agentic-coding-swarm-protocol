@@ -1,0 +1,20 @@
+#!/bin/sh
+# Only the publisher workstation pushes to the integration branch (and always through `pnpm land`).
+# Enable: git config core.hooksPath .githooks (wt:setup does it).
+# Mark the publisher (one person, on a single machine): git config <project>.publisher true
+# Deliberate bypass: git push --no-verify
+INTEGRATION_REF="refs/heads/main"
+FLAG="project.publisher"
+
+if [ "$(git config --bool "$FLAG" 2>/dev/null)" = "true" ]; then
+  exit 0
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "$INTEGRATION_REF" ]; then
+    echo "pre-push: the integration branch is published only from the publisher workstation, with 'pnpm land'." >&2
+    echo "pre-push: push your work branch or tags; to bypass this knowingly, use --no-verify." >&2
+    exit 1
+  fi
+done
+exit 0

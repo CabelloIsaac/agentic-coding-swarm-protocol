@@ -1,0 +1,22 @@
+# Roadmap: the single source of order and priority. `pnpm roadmap` prints it and fails if there are problems.
+# Status is NOT written: planned = no folder; active = in openspec/changes/; done = in changes/archive/.
+# priority: P0 required for the wave's goal · P1 in the MVP, later · P2 out (not started without changing this file).
+# frozen: true parks it · absorbed_by: <id> closes it inside another · depends_on cannot point to a later wave.
+
+goal: >
+  <One paragraph: what this roadmap is meant to achieve, and by when.>
+
+waves:
+  - { id: 0, title: Engineering foundation }
+  - { id: 1, title: <Wave 1> }
+  - { id: 2, title: <Wave 2> }
+
+changes:
+  # ── Wave 0 ─────────────────────────────────────────
+  - { id: dev-verify, title: Single verification gate, block: B-dev, wave: 0, priority: P0 }
+  - { id: dev-land, title: Serialized integration with land, block: B-dev, wave: 0, priority: P0, depends_on: [dev-verify] }
+  - { id: dev-review-schedule, title: Scheduled reviews (daily, weekly), block: B-dev, wave: 0, priority: P1 }
+  # ── Wave 1 ─────────────────────────────────────────
+  - { id: <feature>, title: <…>, block: B1, wave: 1, priority: P0 }
+  # ── Out of the MVP ─────────────────────────────────
+  - { id: <idea>, title: <…>, block: B2, priority: P2, frozen: true }

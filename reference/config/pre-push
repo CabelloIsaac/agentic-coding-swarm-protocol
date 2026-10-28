@@ -1,0 +1,17 @@
+#!/bin/sh
+# Push to the integration branch only from the publishing workstation (single published history).
+# A clone publishes if it has `git config myproject.publisher true` (local, not versioned). Work branches and tags can
+# be pushed from any clone. Conscious, documented escape: git push --no-verify.
+INTEGRATION_REF="refs/heads/main"
+FLAG="myproject.publisher"
+
+[ "$(git config --bool "$FLAG" 2>/dev/null)" = "true" ] && exit 0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "$INTEGRATION_REF" ]; then
+    echo "✗ push to the integration branch rejected: this clone is not the publishing workstation." >&2
+    echo "  Work happens in worktrees and the integration branch is published by 'pnpm land'." >&2
+    echo "  If this clone IS the publisher: git config $FLAG true" >&2
+    exit 1
+  fi
+done
+exit 0

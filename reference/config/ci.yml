@@ -1,0 +1,75 @@
+# Quality gates. No secrets: everything runs against mocks, with no real spending. It must run the same checks as
+# `pnpm verify` (the local gate), so a green land means a green CI.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    # Coverage tests on few workers are slow on a shared runner: keep a generous ceiling
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: npx tsc --noEmit -p apps/app-a
+      - run: pnpm validate:registry
+      - run: pnpm exec openspec validate --all --no-interactive
+      # Includes the architecture and docs tests; fails if coverage drops below its floor.
+      # One worker: with every core plus v8 coverage the runner (7 GB) produced no output for tens of minutes, and with
+      # two workers it was killed for lack of memory. If it is still slow, split the tests across jobs (--shard).
+      - run: pnpm test:coverage --maxWorkers=1
+        timeout-minutes: 60
+      # Memory diagnostics when the job dies: without them an OOM kill looks like a mysterious hang
+      - if: failure() || cancelled()
+        run: |
+          free -m
+          sudo dmesg | grep -iE "out of memory|killed process|oom" | tail -20 || true
+          ps aux --sort=-rss | head -15
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+
+  # Contract suites for an external service (here a database). Make it required through branch protection.
+  storage-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: myproject_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d myproject_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MYPROJECT_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/myproject_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run src/storage

@@ -1,0 +1,12 @@
+{
+  "name": "agentic-coding-swarm-protocol",
+  "description": "Engineering plugins for teams that ship with AI coding agents",
+  "owner": { "name": "AntoniArco", "url": "https://github.com/AntoniArco" },
+  "plugins": [
+    {
+      "name": "swarm",
+      "source": "./",
+      "description": "Worktree per session, single verification gate, serialized integration, ADRs, scheduled review agents, token-efficient defaults"
+    }
+  ]
+}

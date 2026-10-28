@@ -1,0 +1,48 @@
+# CI: the same steps as `pnpm verify`, without secrets, in mock mode.
+# If a gate needs credentials to pass, the test is badly designed.
+# Pin every action to a full commit SHA in your repo (tags are mutable); pnpm comes from corepack, not a third-party action.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm exec openspec validate --all --no-interactive
+      - run: pnpm test:coverage --maxWorkers=1
+      - name: Memory diagnostics on failure
+        if: failure() || cancelled()
+        run: |
+          free -m || true
+          ps aux --sort=-rss | head -15 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+  docker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t app:ci .
+      - name: The image contains no secrets
+        run: docker run --rm --entrypoint test app:ci ! -f /app/.env

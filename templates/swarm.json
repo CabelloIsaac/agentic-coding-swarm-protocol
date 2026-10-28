@@ -1,0 +1,20 @@
+{
+  "protocol": "swarm",
+  "version": "0.1.0",
+  "level": 0,
+  "integrationBranch": "main",
+  "commands": {
+    "verify": "pnpm verify",
+    "verifyQuick": "pnpm verify --quick",
+    "commit": "pnpm wt:commit",
+    "status": "pnpm wt:status",
+    "land": "pnpm land",
+    "newAdr": "docs/adr/draft-<slug>.md",
+    "audit": "pnpm audit:repo"
+  },
+  "hooks": {
+    "sessionStart": "node scripts/dev/wt.ts setup",
+    "stop": "node scripts/dev/wt.ts wip"
+  },
+  "gates": []
+}
