@@ -15,6 +15,10 @@
  *
  * Noise: the `any`, `@ts-ignore`, TODO and big-file counts skip the playground and this script's own source (its
  * regexes match themselves); in the reference project those two inflated `any` by 6 and TODO by 17 in one audit.
+ * Closure first: the findings ledger (`findings.ts`) is summarised at the top of the table (open by severity, overdue,
+ * median open age, opened and closed in 14 days, closure ratio, accepted risks) because an audit that finds more than
+ * the team closes has not improved anything; hot files (many `fix` commits in a file that is also over the size
+ * limit) follow, since a file that keeps being repaired is the cheapest refactor target. Detection comes after.
  * Rules: the bullets of CLAUDE.md are counted by marker (`enforced:` / `preference` / unmarked), so a rule nothing
  * enforces stays visible.
  */
@@ -22,6 +26,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { config } from './dev-flow.config.ts';
+import { type Finding, type Stats, findingsConfig, isoDay, loadFindings, stats as findingsStats } from './findings.ts';
 import { commonDir, toplevel } from './git.ts';
 import { countLines } from './ratchets.ts';
 
@@ -61,6 +66,24 @@ export interface Detection {
   escape_rate?: number;
 }
 
+/** The ledger's numbers at snapshot time (what `findings stats` prints, over the last 14 days). */
+export interface Closure {
+  open: Stats['open'];
+  overdue: number;
+  median_open_age_days?: number;
+  opened_14d: number;
+  closed_14d: number;
+  closure_ratio?: number;
+  accepted: number;
+}
+
+/** A file repaired again and again that is also too big: `fixes` commits starting with `fix` in the window. */
+export interface HotFile {
+  file: string;
+  fixes: number;
+  lines: number;
+}
+
 export interface Metrics {
   date: string;
   commit: string;
@@ -77,6 +100,8 @@ export interface Metrics {
   last_audit_days?: number;
   rules?: { total: number; enforced: number; preference: number; unmarked: number; eroding?: string[] };
   detection?: Detection;
+  closure?: Closure;
+  hot_files?: HotFile[];
   /** Land-log entries since the previous snapshot (all of them without one): what the workflow let through. */
   land?: LandActivity;
 }
@@ -85,6 +110,8 @@ export interface LandActivity {
   landed: number;
   conflict: number;
   review_bypassed: number;
+  /** Lands let through `--override-findings` (the SLA or closure-quota gate would have refused them). */
+  findings_overridden: number;
   /** Date of the previous snapshot the counts start from; absent when there was none. */
   since?: string;
 }
@@ -95,7 +122,7 @@ export interface LandActivity {
  * double-counting one afternoon is better than losing a bypass that happened after the snapshot was taken.
  */
 export function landActivity(lines: string[], since?: string): LandActivity {
-  const out: LandActivity = { landed: 0, conflict: 0, review_bypassed: 0, ...(since ? { since } : {}) };
+  const out: LandActivity = { landed: 0, conflict: 0, review_bypassed: 0, findings_overridden: 0, ...(since ? { since } : {}) };
   for (const line of lines) {
     let e: { at?: unknown; result?: unknown };
     try {
@@ -107,6 +134,7 @@ export function landActivity(lines: string[], since?: string): LandActivity {
     if (e.result === 'landed') out.landed++;
     else if (e.result === 'conflict') out.conflict++;
     else if (e.result === 'review-bypassed') out.review_bypassed++;
+    else if (e.result === 'findings-overridden') out.findings_overridden++;
   }
   return out;
 }
@@ -118,6 +146,53 @@ function readLandLog(cwd: string): string[] | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function closureMetrics(list: Finding[], today: string = isoDay()): Closure {
+  const s = findingsStats(list, { today, sinceDays: 14 });
+  return {
+    open: s.open,
+    overdue: s.overdue,
+    ...(s.median_open_age_days === undefined ? {} : { median_open_age_days: s.median_open_age_days }),
+    opened_14d: s.opened_in_window,
+    closed_14d: s.closed_in_window,
+    ...(s.closure_ratio === undefined ? {} : { closure_ratio: s.closure_ratio }),
+    accepted: s.accepted,
+  };
+}
+
+/** Files named by each commit whose subject starts with `fix` (`git log --name-only` output with `\x01<subject>` headers). */
+export function fixCounts(log: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const block of log.split('\x01').slice(1)) {
+    const [subject = '', ...files] = block.split('\n');
+    if (!/^fix\b/i.test(subject)) continue;
+    for (const f of new Set(files.filter(Boolean))) counts.set(f, (counts.get(f) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Hot files: at least `fixes` fix commits in the last `days` days AND currently over `max` lines (it still exists). */
+export function hotFiles(cwd: string, opts: { fixes: number; days: number; max: number }): HotFile[] {
+  const log = run(cwd, 'git', ['log', `--since=${opts.days}.days.ago`, '--name-only', '--format=%x01%s']);
+  const hot: HotFile[] = [];
+  for (const [file, fixes] of fixCounts(log)) {
+    if (fixes < opts.fixes || !existsSync(join(cwd, file))) continue;
+    const lines = countLines(readFileSync(join(cwd, file), 'utf8'));
+    if (lines > opts.max) hot.push({ file, fixes, lines });
+  }
+  return hot.sort((a, b) => b.fixes - a.fixes || b.lines - a.lines || a.file.localeCompare(b.file));
+}
+
+/** The file-size limit the ratchets enforce (`fileSize.max`), else the audit's own threshold. */
+function sizeLimit(cwd: string): number {
+  try {
+    const max = (JSON.parse(readFileSync(join(cwd, config.ratchets.file), 'utf8')) as { fileSize?: { max?: unknown } }).fileSize?.max;
+    if (typeof max === 'number') return max;
+  } catch {
+    // no ratchets file yet: fall back to the default below
+  }
+  return 500;
 }
 
 const run = (cwd: string, cmd: string, args: string[]): string => {
@@ -360,6 +435,8 @@ export function collect(cwd: string, opts: { deps?: boolean; today?: Date } = {}
   const envExample = existsSync(join(cwd, A.envExampleFile)) ? readFileSync(join(cwd, A.envExampleFile), 'utf8') : '';
   const date = today.toISOString().slice(0, 10);
   const landLines = readLandLog(cwd);
+  const fc = findingsConfig(cwd);
+  const ledger = join(cwd, fc.file);
   return {
     date,
     commit: run(cwd, 'git', ['rev-parse', '--short', 'HEAD']).trim(),
@@ -374,6 +451,8 @@ export function collect(cwd: string, opts: { deps?: boolean; today?: Date } = {}
     coverage: coverageMetrics(cwd),
     ...(opts.deps ? { deps: depsAudit(cwd) } : {}),
     last_audit_days: lastAuditDays(cwd, today),
+    ...(existsSync(ledger) ? { closure: closureMetrics(loadFindings(ledger), date) } : {}),
+    hot_files: hotFiles(cwd, { ...fc.hotFiles, max: sizeLimit(cwd) }),
     ...(landLines ? { land: landActivity(landLines, previousSnapshot(cwd, date)?.date) } : {}),
     ...(existsSync(join(cwd, 'CLAUDE.md')) ? { rules: countRules(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8')) } : {}),
   };
@@ -389,12 +468,39 @@ export function previousSnapshot(cwd: string, before: string): Metrics | undefin
   return f ? (JSON.parse(readFileSync(join(dir, f), 'utf8')) as Metrics) : undefined;
 }
 
+/** Direction of travel against the previous snapshot: ↑ rose, ↓ fell, = unchanged (whether that is good depends on the metric). */
+const arrow = (now: number, before?: number) => (before === undefined ? '' : now === before ? '=' : now > before ? `↑ +${Math.round((now - before) * 100) / 100}` : `↓ ${Math.round((now - before) * 100) / 100}`);
+
 const delta = (now: number, before?: number) => (before === undefined ? '' : now === before ? '=' : now > before ? `+${now - before}` : `${now - before}`);
 
 /** Markdown table with the difference column against the previous snapshot (ready to paste into the report). */
 export function renderTable(m: Metrics, prev?: Metrics): string {
   const rows: [string, string, string][] = [];
   const num = (label: string, now: number, before?: number, note = '') => rows.push([label, `${now}${note}`, delta(now, before)]);
+  // Closure first: how many findings are open and for how long matters more than how many were found
+  const arrowed = (label: string, now: number, before?: number, note = '') => rows.push([label, `${now}${note}`, arrow(now, before)]);
+  if (m.closure) {
+    const c = m.closure;
+    const pc = prev?.closure;
+    arrowed('**Closure** · open findings', c.open.total, pc?.open.total, ` (${c.open.high} high · ${c.open.medium} medium · ${c.open.low} low)`);
+    arrowed('Closure · overdue (past SLA)', c.overdue, pc?.overdue);
+    rows.push(['Closure · median open age (days)', c.median_open_age_days === undefined ? '-' : `${c.median_open_age_days}`, c.median_open_age_days === undefined || pc?.median_open_age_days === undefined ? '' : arrow(c.median_open_age_days, pc.median_open_age_days)]);
+    arrowed('Closure · opened, last 14 days', c.opened_14d, pc?.opened_14d);
+    arrowed('Closure · closed, last 14 days', c.closed_14d, pc?.closed_14d);
+    rows.push(['Closure · ratio (closed / opened)', c.closure_ratio === undefined ? '-' : `${c.closure_ratio}`, c.closure_ratio === undefined || pc?.closure_ratio === undefined ? '' : arrow(c.closure_ratio, pc.closure_ratio)]);
+    arrowed('Closure · accepted risks', c.accepted, pc?.accepted);
+  }
+  if (m.hot_files) {
+    arrowed('Hot files (repeated `fix` + over the size limit)', m.hot_files.length, prev?.hot_files?.length);
+    for (const h of m.hot_files) rows.push([`  ${h.file}`, `${h.fixes} fixes · ${h.lines} lines`, '']);
+  }
+  if (m.detection) {
+    const d = m.detection;
+    const pd = prev?.detection;
+    rows.push(['Detection · new findings', `${d.new}`, delta(d.new, pd?.new)]);
+    rows.push(['Detection · median latency (days)', d.median_latency_days === undefined ? 'unknown' : `${d.median_latency_days}`, d.median_latency_days === undefined ? '' : delta(d.median_latency_days, pd?.median_latency_days)]);
+    rows.push(['Detection · escape rate (catchable at review)', d.escape_rate === undefined ? '—' : `${Math.round(d.escape_rate * 100)} %`, d.escape_rate === undefined || pd?.escape_rate === undefined ? '' : delta(Math.round(d.escape_rate * 100), Math.round(pd.escape_rate * 100))]);
+  }
   num('Lint · errors', m.lint.errors, prev?.lint.errors);
   num('Lint · warnings', m.lint.warnings, prev?.lint.warnings);
   for (const [rule, n] of Object.entries(m.lint.rules).slice(0, 4)) num(`  ${rule.replace(/^lint\//, '')}`, n, prev?.lint.rules[rule]);
@@ -424,18 +530,12 @@ export function renderTable(m: Metrics, prev?: Metrics): string {
     num(`Land log · landed${since}`, l.landed, pl?.landed);
     num('Land log · rebase conflicts', l.conflict, pl?.conflict);
     num('Land log · review bypasses (`--no-review`)', l.review_bypassed, pl?.review_bypassed);
+    num('Land log · findings gates overridden (`--override-findings`)', l.findings_overridden, pl?.findings_overridden);
   }
   if (m.rules) {
     num('CLAUDE.md rules marked `preference`', m.rules.preference, prev?.rules?.preference, ` of ${m.rules.total}`);
     num('CLAUDE.md rules without a marker', m.rules.unmarked, prev?.rules?.unmarked);
     if (m.rules.eroding?.length) rows.push(['Rules found eroding', m.rules.eroding.join('; '), '']);
-  }
-  if (m.detection) {
-    const d = m.detection;
-    const pd = prev?.detection;
-    rows.push(['Detection · new findings', `${d.new}`, delta(d.new, pd?.new)]);
-    rows.push(['Detection · median latency (days)', d.median_latency_days === undefined ? 'unknown' : `${d.median_latency_days}`, d.median_latency_days === undefined ? '' : delta(d.median_latency_days, pd?.median_latency_days)]);
-    rows.push(['Detection · escape rate (catchable at review)', d.escape_rate === undefined ? '—' : `${Math.round(d.escape_rate * 100)} %`, d.escape_rate === undefined || pd?.escape_rate === undefined ? '' : delta(Math.round(d.escape_rate * 100), Math.round(pd.escape_rate * 100))]);
   }
   const header = `| Metric | ${m.date} · ${m.commit} | Δ vs ${prev ? `${prev.date} · ${prev.commit}` : '—'} |\n|---|---|---|`;
   return [header, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n');

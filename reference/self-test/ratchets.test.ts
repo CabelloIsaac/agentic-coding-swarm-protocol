@@ -12,7 +12,9 @@ import {
   checkCoverage,
   checkFileSize,
   checkLint,
+  checkSilentErrors,
   countLines,
+  findSilentCatches,
   countLintWarnings,
   globToRegExp,
   initial,
@@ -288,5 +290,138 @@ describe('ratchets: land tightens after a green verify', () => {
     const r = fx.run('land', ['--no-push'], { env: { [LAND_VERIFY]: 'true' } });
     assert.equal(r.status, 0, r.out);
     assert.equal(sha(fx.main, 'main'), verified);
+  });
+});
+
+const silent = (r: Partial<{ dirs: string[]; exceptions: Record<string, number>; total: number }> = {}) => ({ dirs: ['src/'], exceptions: {}, total: 0, ...r });
+
+describe('ratchets: silent errors, the detector', () => {
+  it('counts the swallows: empty, comment-only, literal returns, continue/break, assignments, .catch(() => literal)', () => {
+    const src = [
+      'try { a(); } catch {}', // 1
+      'try { a(); } catch (e) { /* ignore */ }', // 2
+      'try { a(); } catch (_) { return undefined; }', // 3
+      'for (;;) { try { a(); } catch { continue; } }', // 4
+      'try { a(); } catch { return []; }', // 5
+      'try { a(); } catch (e) { ok = false; }', // 6
+      'p.catch(() => undefined);', // 7
+      'p.catch(() => {});', // 8
+      'p.catch(noop);', // 9
+      'p.catch((e) => null);', // 10
+      'p.catch(function () {});', // 11
+    ].join('\n');
+    assert.deepEqual(findSilentCatches(src), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
+
+  it('does not count the accepted idioms: a catch that logs, one that rethrows, one that returns or uses the error', () => {
+    const src = [
+      "try { a(); } catch (e) { logger.warn({ err: e }, 'a failed'); }",
+      'try { a(); } catch { logger.error("a failed"); }',
+      "try { a(); } catch (e) { throw new AppError('a failed', { cause: e }); }",
+      'try { a(); } catch (e) { return err(e); }',
+      'try { a(); } catch (e) { return e; }',
+      'try { a(); } catch (e) { last = e; }',
+      'p.catch((e) => logger.warn(e));',
+      'p.catch((e) => { report(e); });',
+      "const text = 'catch {}'; // catch {}",
+    ].join('\n');
+    assert.deepEqual(findSilentCatches(src), []);
+  });
+
+  it('handles nested blocks and reports the line of the catch', () => {
+    const src = 'function f() {\n  try {\n    if (x) { y(); }\n  } catch (e) {\n    if (z) { w = 1; }\n    return null;\n  }\n}\n';
+    // the nested block has no call and returns a literal: swallowed, on the line of `catch`
+    assert.deepEqual(findSilentCatches(src), [4]);
+  });
+
+  it('check: a new file or a count above the record fails naming file:line; the total only goes down', () => {
+    const r = silent({ exceptions: { 'src/old.ts': 2 }, total: 2 });
+    assert.deepEqual(checkSilentErrors(r, [{ file: 'src/old.ts', lines: [3, 9] }]), []);
+    const red = checkSilentErrors(r, [{ file: 'src/old.ts', lines: [3, 9, 20] }, { file: 'src/new.ts', lines: [7] }]);
+    assert.equal(red.length, 3);
+    assert.match(red[0]?.message ?? '', /src\/old\.ts has 3 silent catch\(es\) \(recorded 2\): src\/old\.ts:3, src\/old\.ts:9, src\/old\.ts:20/);
+    assert.match(red[1]?.message ?? '', /src\/new\.ts:7/);
+    assert.match(red[2]?.message ?? '', /4 silent catches .* total recorded 2/);
+    // quick tier: per file only
+    assert.equal(checkSilentErrors(r, [{ file: 'src/old.ts', lines: [3] }, { file: 'src/x.ts', lines: [1, 2] }], true).length, 1);
+  });
+
+  it('loosened: a higher total, a new exception, a higher count, a lost dir and a removed section are reported', () => {
+    const base: Ratchets = { silentErrors: silent({ exceptions: { 'src/old.ts': 2 }, total: 2 }) };
+    const red: [string, Ratchets, RegExp][] = [
+      ['total', { silentErrors: silent({ exceptions: { 'src/old.ts': 2 }, total: 3 }) }, /total 2 → 3/],
+      ['new exception', { silentErrors: silent({ exceptions: { 'src/old.ts': 2, 'src/new.ts': 1 }, total: 2 }) }, /new silentErrors exception src\/new\.ts/],
+      ['higher count', { silentErrors: silent({ exceptions: { 'src/old.ts': 3 }, total: 2 }) }, /src\/old\.ts 2 → 3/],
+      ['lost dir', { silentErrors: silent({ dirs: ['lib/'], exceptions: { 'src/old.ts': 2 }, total: 2 }) }, /dirs lost "src\/"/],
+      ['removed', {}, /silentErrors section removed/],
+    ];
+    for (const [name, now, re] of red) {
+      const found = loosened(base, now);
+      assert.equal(found.length, 1, `${name}: ${found.join(' | ')}`);
+      assert.match(found[0] ?? '', re, name);
+    }
+    assert.deepEqual(loosened(base, { silentErrors: silent({ exceptions: { 'src/old.ts': 1 }, total: 1 }) }), []);
+  });
+});
+
+describe('ratchets: silent errors in a repo', () => {
+  const ratchets = (s = silent()): string => JSON.stringify({ silentErrors: s });
+  const SILENT = 'export function f() {\n  try {\n    g();\n  } catch {}\n}\n';
+  const LOGGED = "export function f() {\n  try {\n    g();\n  } catch (e) {\n    logger.warn({ err: e }, 'g failed');\n  }\n}\n";
+
+  it('a new silent catch in a clean dir fails with file:line; a logged one passes', (t) => {
+    const fx = fixture(t);
+    commit(fx.wt, 'ratchets', { 'quality-ratchets.json': ratchets(), 'src/clean.ts': 'export const a = 1;\n' });
+    const green = fx.run('ratchets');
+    assert.equal(green.status, 0, green.out);
+    assert.match(green.out, /✓ ratchets: silentErrors within bounds/);
+
+    write(fx.wt, 'src/logged.ts', LOGGED);
+    assert.equal(fx.run('ratchets').status, 0, 'a catch that logs is accepted');
+
+    write(fx.wt, 'src/swallow.ts', SILENT);
+    const red = fx.run('ratchets');
+    assert.equal(red.status, 1, red.out);
+    assert.match(red.out, /✗ silentErrors: src\/swallow\.ts has 1 silent catch\(es\) \(recorded 0\): src\/swallow\.ts:4/);
+    // quick tier: only the given files, per file
+    assert.equal(fx.run('ratchets', ['--silent-only', 'src/clean.ts']).status, 0);
+    assert.equal(fx.run('ratchets', ['--silent-only', 'src/swallow.ts']).status, 1);
+    // outside the declared dirs, and tests, are not scanned
+    git(fx.wt, 'clean', '-fq', 'src');
+    write(fx.wt, 'scripts/x.ts', SILENT);
+    write(fx.wt, 'src/x.test.ts', SILENT);
+    assert.equal(fx.run('ratchets').status, 0);
+  });
+
+  it('--init records today\'s counts as exceptions and --tighten lowers them', (t) => {
+    const fx = fixture(t);
+    commit(fx.wt, 'code', { 'src/a.ts': `${SILENT}${SILENT.replace('f()', 'g()')}`, 'src/b.ts': SILENT });
+    write(fx.wt, 'quality-ratchets.json', ratchets());
+    assert.equal(fx.run('ratchets', ['--init']).status, 0);
+    const init = JSON.parse(readFileSync(join(fx.wt, 'quality-ratchets.json'), 'utf8')) as Ratchets;
+    assert.deepEqual(init.silentErrors, silent({ exceptions: { 'src/a.ts': 2, 'src/b.ts': 1 }, total: 3 }));
+    commit(fx.wt, 'ratchets', {});
+    assert.equal(fx.run('ratchets').status, 0);
+
+    // fix one in a.ts and the whole of b.ts
+    write(fx.wt, 'src/a.ts', SILENT);
+    write(fx.wt, 'src/b.ts', LOGGED);
+    const tightened = fx.run('ratchets', ['--tighten']);
+    assert.equal(tightened.status, 0, tightened.out);
+    assert.match(tightened.out, /silentErrors: src\/a\.ts 2 → 1/);
+    const after = JSON.parse(readFileSync(join(fx.wt, 'quality-ratchets.json'), 'utf8')) as Ratchets;
+    assert.deepEqual(after.silentErrors, silent({ exceptions: { 'src/a.ts': 1 }, total: 1 }));
+  });
+
+  it('loosening the recorded numbers against the integration branch fails even when the measurement fits', (t) => {
+    const fx = fixture(t);
+    commit(fx.main, 'ratchets', { 'quality-ratchets.json': ratchets(silent({ exceptions: { 'src/a.ts': 1 }, total: 1 })), 'src/a.ts': SILENT });
+    git(fx.wt, 'rebase', '-q', 'main');
+    assert.equal(fx.run('ratchets').status, 0);
+    // a second swallow, hidden by raising the exception instead of fixing it
+    commit(fx.wt, 'feat: more', { 'quality-ratchets.json': ratchets(silent({ exceptions: { 'src/a.ts': 2 }, total: 2 })), 'src/a.ts': `${SILENT}${SILENT.replace('f()', 'g()')}` });
+    const red = fx.run('ratchets');
+    assert.equal(red.status, 1, red.out);
+    assert.match(red.out, /loosened vs main: silentErrors exception src\/a\.ts 1 → 2/);
   });
 });

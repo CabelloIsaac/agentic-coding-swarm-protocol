@@ -1,10 +1,26 @@
 # Audit file skeleton
 
 Write `openspec/audits/<YYYY-MM-DD>.md` with exactly these sections. Keep each finding to six lines: the sixth is
-its detection data, which also goes in `openspec/audits/<YYYY-MM-DD>.findings.json` for `{audit} --findings`.
+its detection data, which also goes in `openspec/audits/<YYYY-MM-DD>.findings.json` for `{audit} --findings`. Every finding
+also gets one `{findings} add` line (with `--dc`, `--introduced` and an owner) in the ledger; the report narrates, the ledger
+is what `land` enforces.
 
 ```markdown
 # Audit <YYYY-MM-DD> · commit <sha7> · scope <full|diff|dimension>
+
+## Cierre
+
+| Measure | Now | Previous | Trend |
+| --- | --- | --- | --- |
+| Open findings (high · medium · low) | n (h · m · l) | n | ↑/↓/= |
+| Overdue (past SLA) | n | n | ↑/↓/= |
+| Median open age, days | d | d | ↑/↓/= |
+| Opened / closed, last 14 days (ratio) | a / c (r) | | ↑/↓/= |
+| Accepted risks | n | n | ↑/↓/= |
+
+<Hot files: each file with ≥ 3 `fix` commits in 30 days that is over the size limit, with its fixes and lines, and the
+refactor proposed for it. Which overdue findings have no owner. The numbers come from `{findings} stats` and the
+metrics table (`{audit}`); the findings themselves are in `docs/audits/findings.jsonl`, written with `{findings} add`.>
 
 <One paragraph: commits since the previous audit (<sha>), machine conditions (memory, parallel sessions), what was
 run, how findings were verified (which highs you re-checked in the code), what was out of scope.>
@@ -43,7 +59,7 @@ measurement itself (playground, the audit script's own patterns) say so and give
 - Resolved: AUD-… (<commit or change>)
 - Reopened: AUD-…
 
-## Detection
+## Detection (second to closure)
 
 | Measure | This audit | Previous | Trend |
 | --- | --- | --- | --- |
@@ -91,9 +107,11 @@ covers it, if any) · defects shared with the reference implementation.
 
 <Verified controls that must not regress, each with the test or script that proves it, grouped by dimension.>
 
-## Proposed order
+## SLA assignments
 
-1. <Block> — <findings> — needs a change | an ADR | a one-commit fix
+| Finding | Owner | Due (`sla_due`) | Closes with |
+| --- | --- | --- | --- |
+| AUD-… | @owner | YYYY-MM-DD | a one-commit fix (`Closes: AUD-…`) \| a change \| an ADR |
 ```
 
 Ids: `AUD-<short-topic>`, stable across audits. A resolved finding stays one more audit, marked

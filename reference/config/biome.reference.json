@@ -4,7 +4,8 @@
   "files": {
     "includes": ["src/**", "packages/**", "apps/**", "scripts/**", "!!.claude", "!**/.next", "!**/next-env.d.ts", "!**/*.json", "!**/*.css"]
   },
-  "formatter": { "enabled": false },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
+  "javascript": { "formatter": { "quoteStyle": "single" } },
   "assist": { "enabled": false },
   "linter": {
     "enabled": true,

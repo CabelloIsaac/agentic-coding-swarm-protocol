@@ -3,6 +3,77 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-10-28
+
+An independent code analysis of the reference project, run on the same day as the 0.3.1 audit, found that detection
+was no longer the bottleneck: about 20 of the 32 High and Medium findings of the latest audit had already been
+reported two weeks earlier and were still open, 2 of 769 commits were refactors, 192 empty `catch {}` hid failures,
+a critical dependency advisory had a one-line fix and no owner, and 75 changes were active with 19 never started.
+This release turns closing into a gate: findings get a ledger with an SLA and `land` refuses work that does not
+close them while a High is overdue. It also closes the four detection gaps the analysis exposed (silent errors,
+vulnerable dependencies, tests that cannot fail, and unformatted code) and adds the concurrency knowledge the
+reference project lacked.
+
+### Added
+
+- **Findings ledger with SLA (L2.8).** `docs/audits/findings.jsonl` holds one line per finding (`id`, severity,
+  `opened`, `owner`, `sla_due`, status); `scripts/dev/findings.ts` adds, closes, accepts, lists and checks it and
+  prints the closure statistics (open by severity, median age, closed/opened ratio, overdue). `audit.ts` seeds it from
+  the audit report (`--findings`) and summarises it at the top of the metrics table; the audit also lists the hot files
+  (most fixes per file).
+- **Closure gate in `land` (L2.9).** With an overdue HIGH open, `land` refuses a change that does not carry
+  `Closes: <id>` in a commit message (or `--override-findings`, which the land log records); every
+  `findings.closureEvery` lands (default 3) one must close a finding; a landed `Closes:` closes the finding in the
+  ledger on the integration branch. `findings.sla` defaults: HIGH 2 days, MEDIUM 14, LOW 60.
+- **Silent-error ratchet (L1.9).** `quality-ratchets.json` gains `silentErrors` (`dirs`, `exceptions`, `total`): a
+  `catch` that neither throws, nor calls anything, nor uses its binding, or a `.catch(() => <literal>)`, counts; the
+  total only goes down, `verify --quick` checks the changed files (`ratchets.ts --silent-only`) and the architecture
+  test template adds a "no silent catch" rule.
+- **Dependency gate (L1.7).** `scripts/dev/deps-audit.ts` normalises `npm`/`pnpm audit`, `pip-audit`, `cargo audit`
+  and generic JSON reports; advisories at `deps.failOn` severities (default critical, high) block unless
+  `deps-allowlist.json` has an unexpired entry with reason and owner. `deps` is a serial step of the full tier and a
+  CI step.
+- **Formatter step (L1.8).** `format` runs in both verify tiers (`format.check` on the repo, `format.quickCheck` on
+  the changed files); the Biome reference config enables the formatter; manual 07 explains turning it on in one
+  logic-free commit with `.git-blame-ignore-revs`.
+- **Mutation smoke (L2.10).** `scripts/dev/mutation-smoke.ts` mutates the files a change touched (`>=`, `<=`, `===`,
+  `&&`/`||`, early `return`) and runs their related tests; all mutants surviving, or no related test, means the change
+  is not proven. It is a smoke, not mutation testing; `mode: warn` first, `fail` once the survivors are fixed.
+- **WIP limit (L3.6).** `roadmap.ts` fails above `roadmap.maxActive` (default 12) active changes and on changes with
+  no task ticked for `roadmap.staleDays` (default 14) unless the proposal carries `parked: <reason>`; the `change`
+  skill checks the limit before proposing.
+- **Concurrency knowledge.** Manual 17 §16 (state transitions need compare-and-swap: `appendIf`, shared reservations,
+  recovery by run id); three defect classes (DC-CONC-01, DC-CONC-02, DC-RUN-06; 49 in total) plus DC rows for silent
+  catches and vulnerable dependencies; a required two-callers check in `test-auditor`, a concurrency paragraph in
+  `reviewer`, manual 04 "Tests that prove behaviour", manual 06 "Work in progress has a limit".
+
+### Changed
+
+- `INTEGRATION.md` §1 documents `findings`, `format`, `deps`, `mutation` and `roadmap` config; §2 lists the five new
+  guarantees; §6 gains L1.7, L1.8, L1.9, L2.8, L2.9, L2.10 and L3.6, and `scripts/check-conformance.mjs` checks the
+  mechanical ones.
+- `templates/github/workflows/ci.yml` runs the formatter, the dependency gate and the ratchets.
+- `MAINTAINING.md`: the release checklist measures closure (open findings, median age, closed/opened) on the
+  reference project, not only detection.
+
+### Migration
+
+New checks join levels 1, 2 and 3, so a project that passed `--check` on 0.3.x fails it on 0.4.0 until these steps
+are done (each is one `/swarm:adopt` step; the `adopt` skill's `levels.md` has the details):
+
+- Level 1: copy `templates/deps-allowlist.json` and `reference/scripts/deps-audit.ts`, set `deps.command`, add the
+  `deps` step (L1.7); turn the formatter on in one logic-free commit and add the `format` step to both tiers (L1.8);
+  run `ratchets.ts --init` to record `silentErrors` and add `--silent-only` to the quick tier (L1.9).
+- Level 2: copy `reference/scripts/findings.ts`, set `commands.findings` and the `findings` block, seed the ledger
+  from the latest audit with an owner on every open HIGH (L2.8, L2.9); copy `mutation-smoke.ts` and add it as a
+  warn-mode serial step after the tests (L2.10). The next `land` enforces the SLA gate: an overdue HIGH blocks a
+  change that does not carry `Closes: <id>`. Pre-0.4 land-log entries are ignored by the closure quota.
+- Level 3: add the `roadmap` block (`maxActive`, `staleDays`); if the project is above the limit, triage with the
+  user before anything else (L3.6).
+
+`swarm.json` `version` → `0.4.0`. The audit skill's report now opens with a closure block and the `--check` output
+with a `closure:` headline once the ledger exists.
+
 ## [0.3.1] — 2026-10-28
 
 A fresh-eyes audit of 0.3.0 and a pilot adoption on a Python repository without the plugin (a non-Claude agent

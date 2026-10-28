@@ -10,6 +10,20 @@ Gates only fail on errors. In ten days, lint warnings went from 412 to 665; ther
 and never archived, 6 never started), 3 `openspec validate` errors that no gate saw, and 19 undocumented
 environment variables. Earlier reports went to a git-ignored folder, so there was nothing to compare against.
 
+## What an audit is for: closure
+
+An audit that finds ten problems and closes none has produced a list. In the reference project about 20 of 32 findings
+were still open ten days later, and a one-line critical CVE fix sat unapplied; detecting was never the bottleneck. So
+the audit's output is **ledger lines, not a prose list**: each finding is appended to the findings ledger
+(`docs/audits/findings.jsonl`) with `findings add` (severity, file, owner, `dc`, `introduced`), and from then on
+`land` enforces its SLA (HIGH 2 days, MEDIUM 14, LOW 60) and a quota of closing lands (chapter 03, "Findings gates").
+The report is the narrative around the ledger.
+
+The headline metric of an audit is therefore **closure**: how many findings are open, how many are overdue, how old
+the open ones are (median), opened vs closed in the last 14 days and the closure ratio. **Detection latency** (days
+from the introducing commit to the audit) and the escape rate come second. **Hot files** (files with three or more
+`fix` commits in a month that are also over the size limit) are listed next to them: that is where a refactor pays.
+
 ## The five dimensions
 
 1. **Structure and invariants**, including the actual structure versus the documented one.
@@ -25,7 +39,7 @@ Seconds, no network (except `--deps`), no spend. It measures: lint warnings per 
 `@ts-ignore`, `biome-ignore` (and those without a reason); files > 500 lines; TODO/FIXME/HACK; active, nearly done
 (≥ 90 % with ≥ 5 tasks) and unstarted changes; `openspec validate` errors and warnings; `process.env.X` missing from
 `.env.example`; secret patterns in tracked files (paths only, never values); draft ADRs; coverage floor and measured
-value; days since the last audit. With `--write` it saves `openspec/audits/<date>.metrics.json`, and the next run
+value; days since the last audit. Its table opens with the Closure block and Hot files, then detection, then the rest. With `--write` it saves `openspec/audits/<date>.metrics.json`, and the next run
 prints the deltas.
 
 ## The judgment part: the audit skill
@@ -48,6 +62,7 @@ report.
 
 ```
 # Audit <date> · commit <sha> · scope <full|diff|dimension>
+## Cierre                           (closure first: open, overdue, median age, opened/closed 14d, ratio, hot files)
 <context paragraph: machine conditions, how findings were verified>
 ## Deterministic checks              (table: check → result)
 ## Metrics                           (metric, value, Δ vs previous)
@@ -56,7 +71,7 @@ report.
 ### AUD-<topic> · <dimension> · confirmed|suspected · **resolved** (<change>)
     file:line · failure scenario · impact · fix
 ## What is working (do not break)    (verified controls that must not regress)
-## Proposed order                    (fix blocks; which need a change or an ADR)
+## SLA assignments                   (finding → owner → due date; which need a change or an ADR)
 ```
 
 `AUD-*` ids are stable across audits. High = breaks an invariant, causes real bugs, is exploitable, or loses money

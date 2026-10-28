@@ -31,12 +31,18 @@ jobs:
       - run: corepack enable && pnpm install --frozen-lockfile
       # Prefer `pnpm verify` as one step; if you list its steps instead, keep them identical to verify.full
       - run: pnpm lint
+      # Formatter (verify step `format`) and dependency gate (verify step `deps`, needs the network): the same commands as
+      # `config.format.check` and `config.deps.command`/`deps-audit.ts` in scripts/dev/dev-flow.config.ts
+      - run: pnpm biome format .
+      - run: node scripts/dev/deps-audit.ts
       - run: pnpm typecheck
       # Domain contract validators: the project's own data files checked against their schemas
       - run: pnpm validate:registry
       - run: pnpm validate:config
       - run: pnpm exec openspec validate --all --no-interactive
       - run: pnpm test:coverage --maxWorkers=1
+      # After the tests: the coverage ratchet reads the summary they write; also holds the silent-error ratchet
+      - run: node scripts/dev/ratchets.ts
       - name: Memory diagnostics on failure
         if: failure() || cancelled()
         run: |

@@ -1,6 +1,6 @@
 {
   "protocol": "swarm",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "level": 0,
   "integrationBranch": "main",
   "commands": {
@@ -12,11 +12,25 @@
     "land": "pnpm land",
     "newAdr": "docs/adr/draft-<slug>.md",
     "audit": "pnpm audit:repo",
-    "ratchets": "node scripts/dev/ratchets.ts"
+    "ratchets": "node scripts/dev/ratchets.ts",
+    "findings": "node scripts/dev/findings.ts"
   },
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup",
     "stop": "node scripts/dev/wt.ts wip"
+  },
+  "findings": {
+    "file": "docs/audits/findings.jsonl",
+    "sla": {
+      "high": 2,
+      "medium": 14,
+      "low": 60
+    },
+    "closureEvery": 3
+  },
+  "roadmap": {
+    "maxActive": 12,
+    "staleDays": 14
   },
   "gates": [],
   "review": {

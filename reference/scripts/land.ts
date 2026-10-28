@@ -11,10 +11,19 @@
  *   pnpm land --squash "<msg>"    squash the commits first (needed when intermediate wip commits remain)
  *   pnpm land --no-push           integrate locally only (no network); `wt setup` warns until it is published
  *   pnpm land --no-review "<why>" skip the review gate; the reason is written to the land log
+ *   pnpm land --override-findings "<why>"  skip the findings gates below; logged as `findings-overridden` with the reason
  *
  * Review gate (INTEGRATION.md L2.7): after the rebase and before the ADR commit and verify, a change the review mode
  * covers (`always`, or `sensitive` with a sensitive path changed) needs a passing receipt for its patch id
  * (`review-receipt.ts`), or land aborts before spending minutes on verify.
+ *
+ * Findings gates (INTEGRATION.md L2.9), right after the review gate and before verify, for the same reason. The ledger
+ * is read from the integration branch, so a branch cannot move its own deadlines. (1) SLA: an open HIGH finding past
+ * its `sla_due` blocks every land unless a commit of the branch carries `Closes: <id>` for each of them. (2) Quota: if
+ * none of the last `closureEvery` lands (any branch) closed a finding, this one must (`Closes: <id>`, `fix(AUD-x):`)
+ * or be a `refactor:`; it only applies while the ledger has open findings, since otherwise there is nothing to
+ * close. After a green verify the closed ids get a `closed` line in the ledger, committed with the ratchets (one
+ * commit, only those two files) on top of the verified SHA. `landed` log entries record `closes` and `refactor`.
  *
  * `<ENV_PREFIX>LAND_VERIFY="<command>"` replaces the verification, and only the self-tests may use it: it is honoured
  * solely when `DEV_FLOW_CONFIG` (the self-tests' config override) is also set; anywhere else it is ignored with a
@@ -47,6 +56,7 @@ import {
   tryLandLock,
   worktrees,
 } from './git.ts';
+import { FindingsError, branchCommits, closeFinding, closingIds, daysOverdue, findingsConfig, isRefactor, isoDay, loadFindings, openFindings, overdue, parseFindings } from './findings.ts';
 import { baselineProblems, loadRatchets, tightenFile } from './ratchets.ts';
 import { loadReviewConfig, reviewGate } from './review-receipt.ts';
 import { fetchRemote, foreignCommits, hasRemote, publish, REMOTE } from './remote.ts';
@@ -81,6 +91,8 @@ export interface LandOptions {
   noPush?: boolean;
   /** Skip the review gate; the reason is mandatory and goes to the land log. */
   noReview?: string;
+  /** Skip the findings gates (SLA and closure quota); the reason is mandatory and goes to the land log. */
+  overrideFindings?: string;
   log?: (line: string) => void;
 }
 
@@ -96,6 +108,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
   const dirty = dirtyPaths(root);
   if (dirty.length) throw new LandError(`${dirty.length} uncommitted change(s): pnpm wt:commit "<message>" and retry`);
   if (opts.noReview !== undefined && !opts.noReview.trim()) throw new LandError('--no-review needs a reason: pnpm land --no-review "<why>"');
+  if (opts.overrideFindings !== undefined && !opts.overrideFindings.trim()) throw new LandError('--override-findings needs a reason: pnpm land --override-findings "<why>"');
 
   prepareCommits(root, opts.squash);
   const commits = pendingSubjects(root).length;
@@ -104,6 +117,9 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
   const lock = acquireLock(root, branch);
   let attempts = 0;
   let head = '';
+  let closes: string[] = [];
+  let refactor = false;
+  const overrideLogged = { value: false };
   try {
     const remote = hasRemote(root);
     if (remote) checkRemote(root, opts, log);
@@ -119,6 +135,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
         if (!runQuiet(root, opts.installCmd ?? config.installCommand)) throw new LandError(`dependency install failed after the rebase: ${INTEGRATION_BRANCH} was not touched`);
       }
       if (opts.noReview === undefined) enforceReview(root, log);
+      enforceFindings(root, branch, opts, log, overrideLogged);
       const docs = regenerateDocs(root);
       if (docs) log(docs);
       // The exact commit under verification: only this SHA may reach the integration branch
@@ -131,9 +148,11 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
         log(`${INTEGRATION_BRANCH} moved during verification: rebasing and verifying again`);
         continue;
       }
-      const landed = tightenRatchets(root, verified, log);
-      advanceIntegration(root, landed);
-      head = landed;
+      const sealed = sealLand(root, verified, log);
+      advanceIntegration(root, sealed.tip);
+      head = sealed.tip;
+      closes = sealed.closes;
+      refactor = sealed.refactor;
       break;
     }
     // Inside the lock, so it does not race the gc of another land or of a session start in the main checkout
@@ -146,7 +165,8 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
     const cleaned = await cleanMerged(root);
     if (cleaned) log(cleaned);
     const result: LandResult = { branch, commits, attempts, head: head.slice(0, 8), seconds: Math.round((Date.now() - started) / 1000), ...published, ...(opts.verifyCmd ? { verify: 'overridden' as const } : {}) };
-    record(root, { ...result, result: 'landed' });
+    // `closes` and `refactor` are what the closure quota of later lands reads
+    record(root, { ...result, closes, refactor, result: 'landed' });
     return result;
   } catch (e) {
     record(root, { branch, commits, attempts, seconds: Math.round((Date.now() - started) / 1000), result: 'failed', reason: (e as Error).message });
@@ -243,33 +263,132 @@ function regenerateDocs(root: string): string | undefined {
  * file, whose values are the measurements of the verified tree; anything else aborts. Returns the SHA to integrate.
  * A failure to measure (lint not installed, say) never blocks a verified land: the file is restored and land goes on.
  */
-function tightenRatchets(root: string, verified: string, log: (line: string) => void): string {
+function sealLand(root: string, verified: string, log: (line: string) => void): { tip: string; closes: string[]; refactor: boolean } {
   const file = config.ratchets.file;
   // Whatever verify did or did not run, a hand-loosened file never gets a tightening commit on top of it
   if (existsSync(join(root, file))) {
     const loose = baselineProblems(root, file, loadRatchets(join(root, file)));
     if (loose.length) throw new LandError(`${loose.map((p) => p.message).join('\n')}\n${INTEGRATION_BRANCH} was not touched`);
   }
-  let changes: string[];
+  let tightened: string[] = [];
   try {
-    changes = tightenFile(root, file);
+    tightened = tightenFile(root, file);
   } catch (e) {
     tryGit(root, 'checkout', '--', file);
     log(`ratchets: not tightened (${(e as Error).message}); the next land retries`);
-    return verified;
   }
-  if (!changes.length) return verified;
+  const commits = branchCommits(root, INTEGRATION_BRANCH, verified);
+  const refactor = commits.some((c) => isRefactor(c.subject));
+  const findingsFile = findingsConfig(root, INTEGRATION_BRANCH).file;
+  const closes = closeFindingsOf(root, findingsFile, commits, log);
+  const changed = [...(tightened.length ? [file] : []), ...(closes.length ? [findingsFile] : [])];
+  if (!changed.length) return { tip: verified, closes, refactor };
   const dirty = dirtyPaths(root);
-  if (dirty.length !== 1 || dirty[0] !== file) {
-    tryGit(root, 'checkout', '--', file);
-    throw new LandError(`tightening the ratchets changed more than ${file} (${dirty.join(', ')}): ${INTEGRATION_BRANCH} was not touched`);
+  if (dirty.length !== changed.length || dirty.some((d) => !changed.includes(d))) {
+    for (const f of changed) tryGit(root, 'checkout', '--', f);
+    throw new LandError(`tightening the ratchets or closing findings changed more than ${changed.join(', ')} (${dirty.join(', ')}): ${INTEGRATION_BRANCH} was not touched`);
   }
-  git(root, 'add', '--', file);
-  git(root, 'commit', '-q', '-m', config.ratchets.commitMessage);
+  git(root, 'add', '--', ...changed);
+  const message = tightened.length && closes.length ? 'chore: tighten ratchets, close findings' : tightened.length ? config.ratchets.commitMessage : `chore: close findings (${closes.join(', ')})`;
+  git(root, 'commit', '-q', '-m', message);
   const tip = git(root, 'rev-parse', 'HEAD');
-  if (git(root, 'diff', '--name-only', verified, tip) !== file) throw new LandError(`the ratchets commit touches more than ${file}: ${INTEGRATION_BRANCH} was not touched`);
-  log(`ratchets tightened: ${changes.join('; ')}`);
-  return tip;
+  if (git(root, 'diff', '--name-only', verified, tip).split('\n').sort().join('\n') !== [...changed].sort().join('\n')) {
+    throw new LandError(`the sealing commit touches more than ${changed.join(', ')}: ${INTEGRATION_BRANCH} was not touched`);
+  }
+  if (tightened.length) log(`ratchets tightened: ${tightened.join('; ')}`);
+  if (closes.length) log(`findings closed: ${closes.join(', ')}`);
+  return { tip, closes, refactor };
+}
+
+/** Appends a `closed` line (`closed_by` = the commit that claimed it) for every open finding the commits name. */
+function closeFindingsOf(root: string, file: string, commits: ReturnType<typeof branchCommits>, log: (line: string) => void): string[] {
+  const path = join(root, file);
+  if (!existsSync(path)) return [];
+  const closed: string[] = [];
+  try {
+    const open = new Set(openFindings(loadFindings(path)).map((f) => f.id));
+    for (const c of commits) {
+      for (const id of closingIds(c)) {
+        if (!open.has(id)) {
+          if (!closed.includes(id)) log(`findings: ${id} (${c.sha.slice(0, 8)}) names no open finding in ${file}: ignored`);
+          continue;
+        }
+        closeFinding(path, id, { by: c.sha });
+        open.delete(id);
+        closed.push(id);
+      }
+    }
+  } catch (e) {
+    if (!(e instanceof FindingsError)) throw e;
+    tryGit(root, 'checkout', '--', file);
+    throw new LandError(`${e.message}: ${INTEGRATION_BRANCH} was not touched`);
+  }
+  return closed;
+}
+
+/** `landed` entries of the land log that carry the `closes` field (the lands made by a findings-aware land), oldest first. */
+function landedWithClosures(root: string): { closes: string[]; refactor: boolean }[] {
+  const path = join(commonDir(root), `${config.projectName}-land-log.jsonl`);
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .flatMap((l) => {
+      try {
+        const e = JSON.parse(l) as { result?: unknown; closes?: unknown; refactor?: unknown };
+        return e.result === 'landed' && Array.isArray(e.closes) ? [{ closes: e.closes as string[], refactor: e.refactor === true }] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+/**
+ * The findings gates (see the header). They read the ledger from the integration branch, never from the branch being
+ * landed, and do nothing in a repository that has no ledger there yet. `--override-findings` lets the land through
+ * and logs which gates it skipped, once per land.
+ */
+function enforceFindings(root: string, branch: string, opts: LandOptions, log: (line: string) => void, logged: { value: boolean }): void {
+  const cfg = findingsConfig(root, INTEGRATION_BRANCH);
+  const text = tryGit(root, 'show', `${INTEGRATION_BRANCH}:${cfg.file}`);
+  if (text === undefined) return;
+  let ledger: ReturnType<typeof parseFindings>;
+  try {
+    ledger = parseFindings(text, `${INTEGRATION_BRANCH}:${cfg.file}`);
+  } catch (e) {
+    if (e instanceof FindingsError) throw new LandError(`${e.message}: ${INTEGRATION_BRANCH} was not touched`);
+    throw e;
+  }
+  const today = isoDay();
+  const commits = branchCommits(root, INTEGRATION_BRANCH);
+  const claimed = new Set(commits.flatMap(closingIds));
+  const problems: { gate: string; message: string }[] = [];
+
+  const late = overdue(ledger, today, 'high').filter((f) => !claimed.has(f.id));
+  if (late.length) {
+    const named = late.map((f) => `${f.id}, ${daysOverdue(f, today)} day(s) overdue`).join('; ');
+    const trailers = late.map((f) => `Closes: ${f.id}`).join('" and "');
+    problems.push({ gate: 'sla', message: `${late.length} open HIGH finding(s) past the SLA (${named}): this land must carry "${trailers}" in a commit message` });
+  }
+
+  const open = openFindings(ledger);
+  if (cfg.closureEvery > 0 && open.length) {
+    const recent = landedWithClosures(root).slice(-cfg.closureEvery);
+    const quietBefore = recent.length === cfg.closureEvery && recent.every((e) => e.closes.length === 0 && !e.refactor);
+    const closesNow = commits.some((c) => isRefactor(c.subject)) || open.some((f) => claimed.has(f.id));
+    if (quietBefore && !closesNow) {
+      problems.push({ gate: 'quota', message: `the last ${cfg.closureEvery} lands closed nothing: this land must close a finding or be a refactor (\`Closes: <id>\` trailer)` });
+    }
+  }
+  if (!problems.length) return;
+
+  if (opts.overrideFindings === undefined) {
+    throw new LandError(`${problems.map((p) => p.message).join('\n')}\nOr use --override-findings "<reason>" (logged). ${INTEGRATION_BRANCH} was not touched`);
+  }
+  if (!logged.value) {
+    logged.value = true;
+    record(root, { branch, result: 'findings-overridden', reason: opts.overrideFindings, gates: problems.map((p) => p.gate) });
+    log(`findings gates skipped (--override-findings): ${opts.overrideFindings}`);
+  }
 }
 
 /**
@@ -353,11 +472,13 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const squashAt = args.indexOf('--squash');
   const noReviewAt = args.indexOf('--no-review');
+  const overrideAt = args.indexOf('--override-findings');
   try {
     const r = await land(process.cwd(), {
       squash: squashAt >= 0 ? (args[squashAt + 1] ?? '') : undefined,
       noPush: args.includes('--no-push'),
       noReview: noReviewAt >= 0 ? (args[noReviewAt + 1] ?? '') : undefined,
+      overrideFindings: overrideAt >= 0 ? (args[overrideAt + 1] ?? '') : undefined,
       verifyCmd: verifyOverride(process.env),
     });
     const overridden = r.verify ? ', verify: overridden' : '';

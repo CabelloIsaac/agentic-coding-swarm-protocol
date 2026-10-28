@@ -31,7 +31,8 @@ log files verify writes would otherwise appear as "uncommitted change(s) appeare
 | `reference/scripts/procs.ts` | Memory and process helpers |
 | `reference/scripts/adr.ts` | `adr` — conflict-free decision records |
 | `reference/scripts/roadmap.ts` | `roadmap` — derived status |
-| `reference/scripts/audit.ts` | `audit` — deterministic debt metrics |
+| `reference/scripts/audit.ts` | `audit` — deterministic debt metrics (closure block and hot files first) |
+| `reference/scripts/findings.ts` | Findings ledger — append-only JSONL with owner and SLA (`add`, `assign`, `close`, `accept`, `list`, `check`, `stats`); read by `land` and `audit` |
 | `reference/scripts/ratchets.ts` | Quality ratchets — file size, coverage floor gap, lint budget (`check` also fails on any loosening of the file against the integration branch, `--size-only`, `--tighten`, `--init`) |
 | `reference/scripts/playground.ts` | Sandbox for throw-away experiments (`playground:new`) |
 | `reference/scripts/test-tmp.ts`, `reference/scripts/vitest-setup.ts`, `reference/scripts/vitest-global-setup.ts`, `reference/tests/cleanup-tmp.ts`, `reference/tests/sequencer.ts` | Test infrastructure |
@@ -59,6 +60,7 @@ Put every project-specific constant in one file (for example `dev-flow.config.ts
 | `portBase` / `portRange` | `3200` / `400` | `wt setup` |
 | `adrDir` | `docs/adr` | `adr`, `land` |
 | `generatedFiles` | regex of framework-generated files to restore | `land`, `wt gc` |
+| `findings` | `{ file: 'docs/audits/findings.jsonl', sla: { high: 2, medium: 14, low: 60 }, closureEvery: 3, hotFiles: { fixes: 3, days: 30 } }` (the `findings` block of `swarm.json` on the integration branch wins; `hotFiles` is read by `audit`) | `findings`, `land`, `audit` |
 | `review` | `{ mode: 'sensitive', sensitive: ['**/auth/**', '**/migrations/**', '.github/**', …] }` (the `review` block of `swarm.json` on the integration branch wins) | `land`, `review-receipt` |
 
 The implementation adds a few more keys, all documented in `reference/scripts/dev-flow.config.ts`: `projectName` and `envPrefix`,
@@ -107,7 +109,7 @@ no `failed`, no coverage error, and the error count equals the count of
 
 ## `land` — serialized, always-green integration
 
-Flags: `--squash "<message>"`, `--no-push`, `--no-review "<reason>"`. Retries: 3.
+Flags: `--squash "<message>"`, `--no-push`, `--no-review "<reason>"`, `--override-findings "<reason>"`. Retries: 3.
 
 1. **Guards (before the lock).** Must run from a linked worktree, on a named branch that is not the integration
    branch; no `.env` in the worktree; no uncommitted changes. Without `--squash`, refuse pending `wip:` commits.
@@ -124,20 +126,35 @@ Flags: `--squash "<message>"`, `--no-push`, `--no-review "<reason>"`. Retries: 3
       /swarm:review (no receipt for this change)". It runs here, after the rebase and before the ADR commit, so the
       patch id is the one the reviewer saw. With `--no-review "<reason>"` it is skipped and a `review-bypassed`
       entry with the reason is logged (an empty reason is refused before the lock).
-   3. Number draft ADRs and regenerate the ADR index; commit if anything changed.
-   4. Record `verified = git rev-parse HEAD`, then run the full `verify`. On failure: "integration branch untouched".
-   5. Require `HEAD == verified` and a clean tree (generated files restored first). Otherwise abort: something wrote
+   3. **Findings gates** (after the review gate, before verify; both read the ledger from the integration branch, and
+      neither runs where no ledger exists there yet). *SLA:* an open HIGH finding past its `sla_due` aborts the land
+      ("N open HIGH finding(s) past the SLA (AUD-x, 3 day(s) overdue): this land must carry "Closes: AUD-x"…") unless a
+      commit of the branch carries `Closes: <id>` for every such finding. *Quota:* looking at the last `closureEvery`
+      `landed` entries of the log that have a `closes` field, if none closed a finding or was a refactor, and this land
+      neither carries `Closes: <id>` (a trailer, or `fix(AUD-x):` in the subject) for an open finding nor has a
+      `refactor:` commit, abort with "the last N lands closed nothing: this land must close a finding or be a refactor".
+      The quota applies only while the ledger has open findings (otherwise there is nothing to close). Both are skipped
+      by `--override-findings "<reason>"` (an empty reason is refused before the lock), which logs `findings-overridden`
+      with the reason and the gates it skipped.
+   4. Number draft ADRs and regenerate the ADR index; commit if anything changed.
+   5. Record `verified = git rev-parse HEAD`, then run the full `verify`. On failure: "integration branch untouched".
+   6. Require `HEAD == verified` and a clean tree (generated files restored first). Otherwise abort: something wrote
       to the branch while verify ran (typically a Stop-hook `wip:` commit) and its tip is not what was verified.
-   6. If the integration branch moved meanwhile, loop again.
-   7. Fast-forward **to the verified SHA, never to the branch name**: in the worktree that has the integration branch
+   7. If the integration branch moved meanwhile, loop again.
+   8. **Seal.** On top of the verified SHA, one commit with the ratchets tightened (`chore: tighten quality ratchets`)
+      and/or every `Closes: <id>` of the landed commits closed in the ledger (a `closed` line with `closed_by` = the
+      claiming commit; ids that name no open finding are ignored with a message). Both changed: one commit
+      `chore: tighten ratchets, close findings`. It may touch only those files, or land aborts.
+   9. Fast-forward **to the verified SHA, never to the branch name**: in the worktree that has the integration branch
       checked out, restore generated files and run `git merge --ff-only <verified>`, so the ref and the working tree
       move together. If no worktree has it checked out, `git update-ref refs/heads/<integration> <verified> <old>` as
       a compare-and-swap.
 5. **Publish** inside the lock: `git push <remote> refs/heads/<integration>:refs/heads/<integration>`. On failure,
    keep the local advance, print the manual command and exit 1.
 6. **Clean up:** run `wt gc`. A gc failure does not undo the land.
-7. **Log** every attempt as JSONL (`landed`, `failed` + reason, `conflict` + files, `review-bypassed` + reason) in
-   `<git-common-dir>/<project>-land-log.jsonl`. These are your workflow metrics.
+7. **Log** every attempt as JSONL (`landed`, `failed` + reason, `conflict` + files, `review-bypassed` + reason, `findings-overridden` + reason and gates) in
+   `<git-common-dir>/<project>-land-log.jsonl`. A `landed` entry also records `closes: [ids]` and `refactor: bool`,
+   which the closure quota of later lands reads. These are your workflow metrics.
 8. Release the lock in `finally`.
 
 **PR mode** (for teams that integrate through pull requests): steps 1–4.4 run with the quick tier, then push the
@@ -229,6 +246,35 @@ Offline, in seconds, no spend. Measures lint warnings per rule; `any`, `as unkno
 never-started changes; spec validation errors; env vars missing from `.env.example`; secret patterns in tracked files
 (paths only); draft ADRs; coverage floor vs. measured; days since the last audit. `--write` stores a JSON snapshot so
 the next run prints deltas.
+
+The table opens with a **Closure** block read from the findings ledger: open findings by severity, overdue, median
+open age, opened and closed in the last 14 days, closure ratio (closed / opened) and accepted risks, each with an
+arrow against the previous snapshot. **Hot files** follow: files with at least `hotFiles.fixes` commits whose subject
+starts with `fix` in the last `hotFiles.days` days that are also over the file-size limit (`fileSize.max` of
+`quality-ratchets.json`, else 500); each is listed, because a file that keeps being repaired and keeps being too big is
+the cheapest refactor to pay for. Detection latency comes next. `--write` stores all of it in the snapshot.
+
+## `findings` — the ledger of what is still open
+
+Detection without closure is noise: the reference project's audits found 32 problems and left about 20 open for ten
+days. `findings.ts` keeps one append-only JSONL file (`docs/audits/findings.jsonl`): `{ id, severity, title, file,
+line?, source: audit|review|incident|ci, opened, owner?, sla_due, status: open|closed|accepted, closed?, closed_by?,
+reason?, introduced?, detected, catchable_at_review?, dc? }`. A status change is a new line with the same `id` carrying
+the whole record again; the latest line is the state, nothing is deleted. `sla_due = opened + sla[severity]` (2 / 14 /
+60 days by default).
+
+| Command | Does |
+|---|---|
+| `add --severity --title --file [--line] [--source] [--owner] [--dc] [--id] [--introduced] [--opened] [--detected] [--catchable-at-review]` | Appends a finding; `AUD-<slug of the title>` unless `--id`. No prompts, so an audit loop can call it once per finding. |
+| `assign <id> --owner <name>` | Appends the owner. |
+| `close <id> [--by <sha>] [--reason]` | Appends a `closed` line. `land` does this for every `Closes: <id>` it lands. |
+| `accept <id> --reason` | Risk accepted: counts as closed for the gate, reported apart (`accepted`). |
+| `list [--open\|--overdue\|--closed]` | One line per finding. |
+| `check` | Exit 1 if an open HIGH is past its SLA (names each and the days overdue); warns for overdue mediums. |
+| `stats [--since <days>]` | Open by severity, median open age, overdue, opened vs closed in the window, closure ratio. |
+
+`--today <YYYY-MM-DD>` pins the clock (loops, tests). Exports: `loadFindings`, `openFindings`, `overdue`, `stats`,
+`closeFinding`. The `land` gates that use it are described in its section.
 
 ## Test infrastructure
 

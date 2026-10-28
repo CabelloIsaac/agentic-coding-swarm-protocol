@@ -15,10 +15,10 @@ audit measures.
   context. Free use in tests.
 - Each app with its own `tsconfig` is type-checked separately (`tsc --noEmit -p apps/<app>`) in `verify` and in CI.
 
-## Lint (Biome, linter only)
+## Lint (Biome)
 
-- `recommended` preset. The formatter is deliberately off to avoid rewriting the whole repo at once: a conscious
-  debt, recorded in the debt table (see chapter 14).
+- `recommended` preset. The formatter is on and `verify` runs it (next sections); switching it off "to avoid
+  rewriting the whole repo" is how the reference project reached 3,232 lines over 200 characters.
 - At **error** across the repo: `noUnusedImports`, `noUnusedVariables`, `noUnusedFunctionParameters`,
   `noFloatingPromises`, `noMisusedPromises`. Why the last two: the storage ports are asynchronous; a write without
   `await` (an event, a tenant file, an ID) would fail silently; with the rule at error it breaks lint instead. To
@@ -39,6 +39,59 @@ audit measures.
 | `noNonNullAssertion` | tests | with `noUncheckedIndexedAccess`, tests index known results |
 | a11y, `noArrayIndexKey`, `useExhaustiveDependencies` | UI apps | `warn`, not error, until the debt is paid |
 | `noImgElement` | UI apps | images are data URLs or tenant files the framework's image optimizer cannot handle |
+
+## Silent errors
+
+**Rule:** an error is never swallowed without a trace. A `catch` logs with context, rethrows a typed error, or
+returns a Result; it does not do nothing.
+
+Why: in the reference project 192 `catch {}` without a variable and 86 `.catch(() => undefined)` sat next to 38
+`logger.error/warn` calls in the whole product. 278 places where a failure vanishes without telemetry is a
+reliability problem, not a style one: a job worker that "guarantees nothing stays running" swallowed the failure of
+its own closing routine, so the one thing it promised could fail unseen. Lint does not stop it (an empty `catch` is
+valid code), so the ratchet does.
+
+`silentErrors` in `quality-ratchets.json` (`{ dirs, exceptions: { "<file>": <count> }, total }`; `ratchets.ts`)
+counts, in the declared dirs (default `src/`, tests excluded), with a deliberately pragmatic text detector:
+
+- a `catch` block with no `throw`, no call, that never uses its binding and returns at most a literal: empty,
+  comment-only, `return undefined|null|false|0|''|[]|{}`, `continue`, `break`, a bare assignment;
+- `.catch(() => undefined|null|false|true|0|''|[]|{})`, `.catch(() => {})` and `.catch(noop)`.
+
+Two idioms are **not** counted, because the failure leaves a trace: a catch that logs (`logger.warn(...)` or any
+call; the detector does not judge what the call does) and a catch that rethrows a typed error (with the original as
+`cause`). Returning an error value (`return err(e)`) is accepted too. A new silent catch fails `verify` with its
+`file:line`; each recorded count and the total only go down, `--init` records today's counts as exceptions and
+`land` tightens them. The architecture-test template has the same rule with an allow-list (file → count), for repos
+that have not adopted the ratchets file yet.
+
+Fixing one: (1) **log with context** (what was being done, the ids involved, the error), and decide whether the
+code can continue; (2) **rethrow typed** when the caller can act (`throw new StorageError('…', { cause: e })`);
+(3) **return a Result** when failure is an expected outcome (`{ ok: false, error }`), so the caller must look at
+it. If ignoring really is right (best-effort cleanup of a temp file), log at `debug` with the reason: one line is
+cheaper than the next unexplained incident. Start with the closing and cleanup routines: swallowing there hides
+the failures that leave things running.
+
+## Formatter
+
+**Rule:** the formatter runs in `verify`, in both tiers, and an unformatted file does not integrate.
+`config.format.check` (default `pnpm biome format .`, which exits 1 when a file would change) runs in the full
+tier; the quick tier runs `config.format.quickCheck` on the changed files. Other stacks: `prettier --check .`,
+`ruff format --check .`, `test -z "$(gofmt -l .)"`, `cargo fmt --check`. `reference/config/biome.reference.json`
+ships with the formatter enabled (2 spaces, 120 columns, single quotes) next to the lint rules.
+
+Turning it on in an existing repo, once:
+
+1. One commit, `chore: format`, made by running the formatter over the repo and **nothing else**: no logic, no
+   renames, no lint fixes. Review it by checking that the diff without whitespace is empty
+   (`git diff -w --stat` for the logic, and the tests green).
+2. Coordinate it so open branches rebase once: land it when few sessions are open, announce it, and have the
+   others `git rebase` right after (conflicts in already-formatted regions resolve by taking the formatter's side
+   and re-running it).
+3. List that commit's SHA in `.git-blame-ignore-revs` and run
+   `git config blame.ignoreRevsFile .git-blame-ignore-revs` (GitHub reads the file by itself), so `blame` still
+   points at the real author of each line.
+4. Add the `format` step to `verify` and CI in the same land, so the repo cannot drift back.
 
 ## Size and structure
 
@@ -127,6 +180,7 @@ dependencies):
 | `fileSize` | `{ max: 500, include, exclude, exceptions: { "<path>": <lines> } }` | a file in scope is over `max` and is not an exception; an exception grew past its recorded size | exceptions shrink to the current size; an exception at or under `max`, or deleted, is removed |
 | `coverage` | `{ summary, floor: { lines, statements, functions, branches }, maxGap: 1 }` | measured is below the floor; measured is more than `maxGap` above it ("raise the floor to X") | each floor rises to measured − `maxGap`/2, rounded down to one decimal |
 | `lintWarnings` | `{ command, budget, perRule? }` | the warnings counted from the linter's JSON (Biome or ESLint shape) exceed `budget` or a rule's budget | `budget` and each `perRule` entry fall to the current count |
+| `silentErrors` | `{ dirs, exceptions: { "<path>": <count> }, total }` | a file has more silent catches than its recorded count (message: `file:line`), or the total exceeds the recorded one | counts shrink to the current number; a file with none is removed; `total` falls |
 
 - **Only tighten.** `--tighten` never adds an exception, lowers a floor or raises a budget. Loosening is a hand
   edit of a gate file, which the quality-gate hook flags and review must justify.
@@ -150,14 +204,15 @@ dependencies):
   nothing rewrites the config: you raise it in the same change. Option (a) is the one that cannot drift.
 - **In `verify`.** The full tier runs the ratchets as the last serial step, after the tests, because the coverage
   check reads the summary the test step writes (`json-summary` reporter). The quick tier checks only `fileSize`,
-  only on the changed files, in milliseconds.
+  only on the changed files, in milliseconds; the silent-error ratchet runs per file in the quick tier (the total
+  is judged by the full run).
 - **In `land`.** After a green verify, `land` runs `--tighten` and, if the file changed, commits it on its own
   ("chore: tighten quality ratchets") on top of the verified SHA, the same pattern as the ADR numbering commit.
   **Only that file may change:** `land` checks that the commit touches nothing else and aborts otherwise. That
   commit is the one exception to "integrate exactly what was verified", and it is safe because its values are the
   measurements of the verified tree. A failure to measure (a missing linter) never blocks a verified land: the
   file is restored and the next land retries.
-- **Other stacks.** The same three numbers exist everywhere: file length, a coverage report (`coverage.py json`,
+- **Other stacks.** The same numbers exist everywhere: file length, a coverage report (`coverage.py json`,
   `go tool cover`, `llvm-cov`, JaCoCo) and a linter with a JSON reporter. Port the script or keep the file format
   and write the check in your stack.
 
@@ -170,4 +225,5 @@ audit counts the preferences that remain and names the ones it finds eroding.
 The strict `tsconfig` and the Biome configuration of the reference implementation described in
 `reference/README.md` (adapt the paths), the exception table with reasons, and the suppression-with-reason rule;
 both tables are in `templates/docs/quality.md`. Then `templates/quality-ratchets.json` with
-`reference/scripts/ratchets.ts`, initialized from your repo's current state.
+`reference/scripts/ratchets.ts`, initialized from your repo's current state (the `silentErrors` section records
+every silent catch you have today as an exception that only shrinks).

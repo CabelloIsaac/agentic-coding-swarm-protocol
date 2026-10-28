@@ -70,6 +70,11 @@ state your assumption and continue.
    - rule breaks that are explicitly suppressed with a written reason;
    - security findings that need an exploit path: name the file and recommend the `security-reviewer` instead.
 
+**Concurrency.** When the diff touches a state machine, a lock, a reservation or a ledger transition, walk
+`DC-CONC-01` (read, check, then write without a conditional write) and `DC-CONC-02` (reservation or counter in process
+memory), plus `DC-RUN-06` if it touches recovery. Ask of each transition: what happens if two callers run it at the
+same instant, and which test proves it? An in-memory mutex is not an answer across processes.
+
 ## Severity
 
 - **High** (blocks land): red gate, a real bug with a reachable trigger, a broken invariant, data or money loss,

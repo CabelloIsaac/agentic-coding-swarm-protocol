@@ -9,8 +9,9 @@
 // Where §6 is ambiguous the stricter mechanical reading is taken (marked "stricter" below). A `✓` whose evidence
 // says "structure only" proves the file or key exists, not what it does: the agent never gets a `?` for it, so
 // L1.1's instruction asks it to confirm in the verify output that the architecture and docs tests ran.
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 const SELF = dirname(new URL(import.meta.url).pathname);
 const USAGE = 'usage: check-conformance.mjs [--repo <path>] [--level 0-3 | --transfer | --all] [--json]';
@@ -123,6 +124,64 @@ function ruleBullets(text) {
   return bullets.filter((b) => b.section);
 }
 
+// ---- findings ledger (INTEGRATION.md §1, L2.8): the same reading as reference/scripts/findings.ts, kept standalone
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const day = (d) => d.toISOString().slice(0, 10);
+const daysBetween = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+const findingsFile = () => (typeof m.findings?.file === 'string' && m.findings.file) || 'docs/audits/findings.jsonl';
+/** The latest line of each id, or `{ error }` naming the first bad line. */
+function readLedger() {
+  const file = findingsFile();
+  if (!has(file)) return { file, error: `${file} missing` };
+  const byId = new Map();
+  const lines = read(file).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    let o;
+    try {
+      o = JSON.parse(lines[i]);
+    } catch {
+      return { file, error: `${file}:${i + 1} is not valid JSON` };
+    }
+    const bad = [];
+    if (typeof o?.id !== 'string' || !o.id) bad.push('id');
+    if (!['high', 'medium', 'low'].includes(o?.severity)) bad.push('severity');
+    if (!['open', 'closed', 'accepted'].includes(o?.status)) bad.push('status');
+    for (const k of ['opened', 'sla_due']) if (!DAY.test(o?.[k] ?? '')) bad.push(k);
+    if (bad.length) return { file, error: `${file}:${i + 1} has a missing or invalid ${bad.join(', ')}` };
+    byId.set(o.id, { ...byId.get(o.id), ...o });
+  }
+  return { file, findings: [...byId.values()] };
+}
+/** `open 12 · overdue 2 · median age 9d · closure 0.6` (closure = closed / opened in the last 14 days), as in `findings stats`. */
+function closureStats(findings, today = day(new Date())) {
+  const open = findings.filter((f) => f.status === 'open');
+  const from = day(new Date(Date.parse(`${today}T00:00:00Z`) - 14 * 86_400_000));
+  const opened = findings.filter((f) => f.opened >= from).length;
+  const closed = findings.filter((f) => f.status === 'closed' && (f.closed ?? '') >= from).length;
+  const ages = open.map((f) => daysBetween(f.opened, today)).sort((a, b) => a - b);
+  const mid = Math.floor(ages.length / 2);
+  const median = ages.length ? (ages.length % 2 ? ages[mid] : (ages[mid - 1] + ages[mid]) / 2) : undefined;
+  const stats = { open: open.length, overdue: open.filter((f) => f.sla_due < today).length, medianAgeDays: median === undefined ? undefined : Math.round(median), closure: opened ? Math.round((closed / opened) * 100) / 100 : undefined };
+  return { ...stats, line: `open ${stats.open} · overdue ${stats.overdue} · median age ${stats.medianAgeDays === undefined ? '-' : `${stats.medianAgeDays}d`} · closure ${stats.closure ?? '-'}` };
+}
+/** `landed` entries of the project's land log (in git's common directory), oldest first; undefined when there is no log. */
+function landedEntries() {
+  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: repo, encoding: 'utf8' });
+  if (r.status !== 0) return undefined;
+  const dir = isAbsolute(r.stdout.trim()) ? r.stdout.trim() : join(repo, r.stdout.trim());
+  const logs = existsSync(dir) ? readdirSync(dir).filter((f) => /-land-log\.jsonl$/.test(f)) : [];
+  if (!logs.length) return undefined;
+  return logs.flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n')).flatMap((l) => {
+    try {
+      const e = JSON.parse(l);
+      return e.result === 'landed' ? [e] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 // ---- the checks
 const checks = [];
 const check = (id, name, fn) => checks.push({ id, name, fn });
@@ -228,6 +287,47 @@ check('L1.6', 'Ratchets', () => {
   return pass(`quality-ratchets.json well-formed; ratchets command "${run}"`);
 });
 
+check('L1.7', 'Dependency gate', () => {
+  if (!has('deps-allowlist.json')) return fail('deps-allowlist.json missing (templates/deps-allowlist.json; an empty allowlist is fine)');
+  const a = json('deps-allowlist.json');
+  if (!a || typeof a !== 'object') return fail('deps-allowlist.json does not parse');
+  const today = new Date().toISOString().slice(0, 10);
+  const entries = Object.entries(a).filter(([k]) => k !== '//' && !k.startsWith('_'));
+  const bad = entries.filter(([, v]) => !(v && typeof v.reason === 'string' && v.reason.trim() && typeof v.owner === 'string' && v.owner.trim() && /^\d{4}-\d{2}-\d{2}$/.test(v.expires ?? ''))).map(([k]) => k);
+  if (bad.length) return fail(`deps-allowlist.json entries without reason, owner and expires (YYYY-MM-DD): ${bad.join(', ')}`);
+  const expired = entries.filter(([, v]) => v.expires < today).map(([k, v]) => `${k} (${v.expires})`);
+  if (expired.length) return fail(`expired allowlist entries: ${expired.join(', ')}`);
+  const script = walk('scripts', 2).find((f) => /(^|\/)deps-audit\.[a-z]+$/.test(f));
+  const AUDIT = /\b(npm|pnpm|yarn) audit\b|\bpip-audit\b|\bcargo audit\b|\bgovulncheck\b|\bosv-scanner\b|\bdeps-audit\b/;
+  const named = [...ciFiles(), 'package.json', 'Makefile', 'justfile', 'pyproject.toml', 'noxfile.py', 'tox.ini'].filter((f) => AUDIT.test(read(f)));
+  if (!script && !named.length) return fail('no dependency audit found: no scripts/**/deps-audit.* and no CI, package.json, Makefile or pyproject naming npm/pnpm audit, pip-audit, cargo audit, govulncheck or osv-scanner');
+  return pass(`deps-allowlist.json ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}, none expired; audit via ${script ?? named[0]} (its run inside verify is confirmed through L1.1)`);
+});
+check('L1.8', 'Formatter', () => {
+  const biome = json('biome.json') ?? json('biome.jsonc');
+  if (biome?.formatter?.enabled === false) return fail('biome.json has formatter.enabled: false (manual chapter 07: turn it on in one logic-free commit)');
+  const pkg = json('package.json');
+  const py = read('pyproject.toml');
+  const evidence = biome?.formatter ? 'biome.json formatter' : biome && !('formatter' in biome) ? 'biome.json (formatter on by default)'
+    : walk('.', 0).some((f) => /^\.prettierrc(\..+)?$/.test(f)) || pkg?.prettier ? 'prettier config'
+    : /\[tool\.ruff/.test(py) || /\[tool\.black\]/.test(py) ? 'pyproject.toml ruff/black'
+    : has('rustfmt.toml') || has('.rustfmt.toml') || has('Cargo.toml') ? 'rustfmt'
+    : has('go.mod') ? 'gofmt' : '';
+  const FORMAT = /\bformat\b|\bprettier\b|\bgofmt\b|\bfmt\b|\bblack\b/;
+  const named = [...ciFiles(), 'package.json', 'Makefile', 'justfile', 'pyproject.toml', 'noxfile.py', 'tox.ini'].filter((f) => FORMAT.test(read(f)));
+  if (!evidence && !named.length) return fail('no formatter configured (biome.json formatter, prettier, ruff/black, rustfmt, gofmt) and no format step named in CI, package.json, Makefile or pyproject');
+  return pass(`${evidence || `format step in ${named[0]}`} (the check running inside verify is confirmed through L1.1)`);
+});
+check('L1.9', 'Silent errors', () => {
+  const r = json('quality-ratchets.json');
+  if (!r) return fail('quality-ratchets.json missing or unparsable (L1.6)');
+  const se = r.silentErrors;
+  if (!se || typeof se !== 'object') return fail('quality-ratchets.json has no silentErrors section (dirs, exceptions, total): a new empty catch is not counted');
+  if (!Array.isArray(se.dirs) || !se.dirs.length) return fail('silentErrors.dirs must list at least one directory');
+  if (!Number.isInteger(se.total) || se.total < 0) return fail('silentErrors.total must be a non-negative integer (ratchets.ts --init records the current count)');
+  return pass(`silentErrors over ${se.dirs.join(', ')}: total ${se.total}, ${Object.keys(se.exceptions ?? {}).length} exception(s)`);
+});
+
 check('L2.1', 'Worktrees', () => {
   if (gitignoreMissing('.claude/worktrees/').length && gitignoreMissing('worktrees/').length) return fail('.gitignore does not ignore the worktree directory (.claude/worktrees/)');
   if (!m.hooks?.sessionStart && !/worktree/i.test(read('AGENTS.md'))) return fail('neither hooks.sessionStart nor an AGENTS.md session protocol (§5 step 1) documents the worktree start');
@@ -271,6 +371,31 @@ check('L2.7', 'Review gate', () => {
   if (r.mode === 'sensitive' && !(Array.isArray(r.sensitive) && r.sensitive.length && r.sensitive.every((g) => typeof g === 'string'))) return fail('review.mode is "sensitive" but review.sensitive is not a non-empty array of globs');
   return pass(`review.mode ${r.mode}${r.mode === 'sensitive' ? `, ${r.sensitive.length} sensitive globs` : ''} (structure only)`);
 });
+check('L2.8', 'Findings ledger', () => {
+  const l = readLedger();
+  if (l.error) return fail(l.error);
+  const sla = m.findings?.sla;
+  if (sla !== undefined && !['high', 'medium', 'low'].every((k) => Number.isInteger(sla[k]) && sla[k] > 0)) return fail('swarm.json findings.sla must give positive integer days for high, medium and low');
+  const unowned = l.findings.filter((f) => f.status === 'open' && f.severity === 'high' && !(typeof f.owner === 'string' && f.owner.trim()));
+  if (unowned.length) return fail(`${unowned.length} open high finding(s) without an owner: ${unowned.map((f) => f.id).join(', ')}`);
+  const open = l.findings.filter((f) => f.status === 'open');
+  return pass(`${l.file}: ${l.findings.length} finding(s), ${open.length} open (${open.filter((f) => f.severity === 'high').length} high, all with owner and sla_due)`);
+});
+check('L2.9', 'Closure gate', () => {
+  if (need(['findings']).length) return fail('commands.findings is not set');
+  if (resolves(cmd.findings) === false) return fail(`commands.findings "${cmd.findings}" does not resolve to an existing script`);
+  const every = m.findings?.closureEvery;
+  if (every !== undefined && !(Number.isInteger(every) && every > 0)) return fail('swarm.json findings.closureEvery must be a positive integer');
+  const landed = landedEntries();
+  if (landed?.length && !Array.isArray(landed.at(-1).closes)) return fail('the latest `landed` entry of the land log has no `closes` field: the land in use predates the findings gates (SLA and closure quota)');
+  return pass(`commands.findings "${cmd.findings}"${landed?.length ? '; the land log records closes' : '; no land log yet'} (structure only: that land refuses an overdue high and a quiet streak is proven by the reference self-tests)`);
+});
+
+check('L2.10', 'Mutation smoke', () => {
+  const script = walk('scripts', 2).find((f) => /(^|\/)mutation-smoke\.[a-z]+$/.test(f));
+  if (!script) return fail('no scripts/**/mutation-smoke.* (reference/scripts/mutation-smoke.ts): a change whose related tests cannot fail passes the gate unnoticed');
+  return pass(`${script} (structure only; its step inside verify is confirmed through L1.1, and that survivors are reported by the reference self-tests)`);
+});
 
 check('L3.1', 'Roadmap', () => {
   const f = walk('.', 3).find((p) => /(^|\/)roadmap\.(ya?ml|md|json)$/i.test(p) && !/templates\//.test(p));
@@ -290,6 +415,16 @@ check('L3.4', 'Scheduled review', () => {
   return fail('no CI workflow with a schedule: trigger and no /schedule routine named in CLAUDE.md');
 });
 check('L3.5', 'Conflict-free ADRs', () => (/draft/i.test(cmd.newAdr ?? '') ? pass(`commands.newAdr "${cmd.newAdr}" produces drafts`) : fail('commands.newAdr does not produce a draft (expected docs/adr/draft-<slug>.md or a command that does)')));
+
+check('L3.6', 'WIP limit', () => {
+  const limit = m.roadmap?.maxActive ?? 12;
+  if (!(Number.isInteger(limit) && limit > 0)) return fail('swarm.json roadmap.maxActive must be a positive integer');
+  const dirs = ['openspec/changes', 'changes', 'docs/changes'].filter(has);
+  if (!dirs.length) return fail('no changes directory found (openspec/changes): the WIP limit needs the spec-driven layout of L3.1');
+  const active = readdirSync(abs(dirs[0])).filter((n) => n !== 'archive' && !n.startsWith('.') && statSync(abs(`${dirs[0]}/${n}`)).isDirectory());
+  if (active.length > limit) return fail(`${active.length} active changes in ${dirs[0]}, limit ${limit} (roadmap.maxActive): close or archive before opening more`);
+  return pass(`${active.length} active change(s) in ${dirs[0]}, limit ${limit} (staleness, roadmap.staleDays, is checked by the roadmap validator inside verify)`);
+});
 
 check('X1', 'Fresh clone', () => {
   if (need(['setup']).length) return fail('commands.setup is not set');
@@ -356,16 +491,19 @@ if (pluginVersion && typeof m.version === 'string' && SEMVER.test(m.version)) {
   versionLine = c === 0 ? `version ${m.version} = plugin` : `version ${m.version} ${relation} plugin ${pluginVersion}`;
 }
 
+const ledger = readLedger();
+const closure = ledger.findings ? closureStats(ledger.findings) : undefined;
 const failing = results.filter((r) => r.status === 'fail').map((r) => r.id);
 const judging = results.filter((r) => r.status === 'judge').map((r) => r.id);
 const mechanicalPass = failing.length === 0;
 
 if (opts.json) {
   const checksOut = results.map(({ id, name, status, evidence }) => ({ id, name, status, evidence }));
-  console.log(JSON.stringify({ level: scope, checks: checksOut, version: { project: m.version, plugin: pluginVersion, relation }, mechanicalPass }, null, 2));
+  console.log(JSON.stringify({ level: scope, checks: checksOut, ...(closure ? { closure } : {}), version: { project: m.version, plugin: pluginVersion, relation }, mechanicalPass }, null, 2));
 } else {
   const mark = { pass: '✓', fail: '✗', judge: '?' };
   console.log(`swarm check · ${typeof scope === 'number' ? `level ${scope}` : scope} · protocol ${m.version ?? 'unknown'}`);
+  if (closure) console.log(`closure: ${closure.line}`);
   const w = Math.max(...results.map((r) => r.name.length));
   for (const r of results) console.log(`${mark[r.status]} ${r.id.padEnd(4)} ${r.name.padEnd(w)}  ${r.status === 'judge' ? 'needs judgement: ' : ''}${r.evidence}`);
   console.log(versionLine);

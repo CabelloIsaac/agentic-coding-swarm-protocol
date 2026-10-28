@@ -66,7 +66,7 @@ describe('check-conformance', () => {
       const r = run(repo, '--level', '0');
       assert.equal(r.status, 0, r.stdout);
       for (const id of ['L0.1', 'L0.2', 'L0.3', 'L0.4', 'L0.5', 'L0.6']) assert.match(line(r.stdout, id) ?? '', /^✓/, `${id}\n${r.stdout}`);
-      assert.match(r.stdout, /^version 0\.3\.\d+ = plugin$/m);
+      assert.match(r.stdout, /^version \d+\.\d+\.\d+ = plugin$/m);
       assert.match(r.stdout, /^result: mechanical pass$/m);
     });
     it('exits 1 for --level 1 and lists every L1 id', () => {
@@ -116,9 +116,16 @@ describe('check-conformance', () => {
       put(repo, 'package.json', JSON.stringify({ scripts: { verify: 'x', 'wt:commit': 'x', 'wt:status': 'x', land: 'x', 'audit:repo': 'x' } }));
       put(repo, '.github/workflows/ci.yml', 'name: ci\non: push\njobs:\n  quality:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm verify\n');
       put(repo, '.github/workflows/weekly.yml', 'on:\n  schedule:\n    - cron: "0 5 * * 1"\njobs:\n  r:\n    steps: []\n');
+      copy(repo, 'deps-allowlist.json', 'deps-allowlist.json');
+      put(repo, 'scripts/dev/deps-audit.ts', '//');
+      put(repo, 'scripts/dev/mutation-smoke.ts', '//');
+      put(repo, 'biome.json', JSON.stringify({ formatter: { enabled: true } }));
+      put(repo, 'openspec/changes/.keep', '');
       copy(repo, 'AGENTS.md', 'AGENTS.md');
       copy(repo, 'githooks/pre-push', '.githooks/pre-push');
       put(repo, 'test/docs.test.ts', '//');
+      put(repo, 'scripts/dev/findings.ts', '//');
+      copy(repo, 'docs/audits/findings.jsonl', 'docs/audits/findings.jsonl');
       put(repo, 'openspec/roadmap.yaml', 'changes: []\n');
       put(repo, 'openspec/audits/2026-10-28.md', '# Audit\n');
       return repo;
@@ -147,6 +154,35 @@ describe('check-conformance', () => {
       put(a, '.github/workflows/ci.yml', 'jobs:\n  q:\n    steps:\n      - run: pnpm verify\n        env:\n          K: ${{ secrets.API_KEY }}\n');
       assert.match(line(run(a, '--level', '1').stdout, 'L1.5'), /^✗.*API_KEY/);
     });
+    it('L1.7 fails on a missing allowlist, an expired entry, or no audit; L1.8 on a disabled formatter; L1.9 without silentErrors', () => {
+      const a = full();
+      rmSync(join(a, 'deps-allowlist.json'));
+      assert.match(line(run(a, '--level', '1').stdout, 'L1.7'), /^✗.*deps-allowlist\.json missing/);
+      put(a, 'deps-allowlist.json', JSON.stringify({ 'GHSA-1': { reason: 'r', owner: 'o', expires: '2020-01-01' } }));
+      assert.match(line(run(a, '--level', '1').stdout, 'L1.7'), /^✗.*expired.*GHSA-1/);
+      put(a, 'deps-allowlist.json', JSON.stringify({ 'GHSA-1': { reason: 'r', owner: 'o', expires: '2999-01-01' } }));
+      assert.match(line(run(a, '--level', '1').stdout, 'L1.7'), /^✓.*1 entry, none expired/);
+      rmSync(join(a, 'scripts/dev/deps-audit.ts'));
+      assert.match(line(run(a, '--level', '1').stdout, 'L1.7'), /^✗.*no dependency audit found/);
+      const b = full();
+      put(b, 'biome.json', JSON.stringify({ formatter: { enabled: false } }));
+      assert.match(line(run(b, '--level', '1').stdout, 'L1.8'), /^✗.*formatter\.enabled: false/);
+      rmSync(join(b, 'biome.json'));
+      assert.match(line(run(b, '--level', '1').stdout, 'L1.8'), /^✗.*no formatter configured/);
+      const c = full();
+      const r = JSON.parse(readFileSync(join(c, 'quality-ratchets.json'), 'utf8'));
+      delete r.silentErrors;
+      put(c, 'quality-ratchets.json', JSON.stringify(r));
+      assert.match(line(run(c, '--level', '1').stdout, 'L1.9'), /^✗.*no silentErrors section/);
+    });
+    it('L3.6 fails above roadmap.maxActive active changes', () => {
+      const a = full();
+      put(a, 'swarm.json', JSON.stringify({ ...JSON.parse(readFileSync(join(a, 'swarm.json'), 'utf8')), roadmap: { maxActive: 2, staleDays: 14 } }));
+      for (const n of ['one', 'two', 'three']) put(a, `openspec/changes/${n}/proposal.md`, '# x\n');
+      assert.match(line(run(a, '--level', '3').stdout, 'L3.6'), /^✗.*3 active changes.*limit 2/);
+      rmSync(join(a, 'openspec/changes/three'), { recursive: true });
+      assert.match(line(run(a, '--level', '3').stdout, 'L3.6'), /^✓.*2 active change\(s\).*limit 2/);
+    });
     it('L1.6 fails on a malformed ratchets file', () => {
       const a = full();
       put(a, 'quality-ratchets.json', '{"fileSize":{"max":500}}');
@@ -158,6 +194,9 @@ describe('check-conformance', () => {
         ['L2.4', () => {}],
         ['L2.5', (r) => rmSync(join(r, 'test/docs.test.ts'))],
         ['L2.6', (r) => rmSync(join(r, 'AGENTS.md'))],
+        ['L2.8', (r) => rmSync(join(r, 'docs/audits/findings.jsonl'))],
+        ['L2.10', (r) => rmSync(join(r, 'scripts/dev/mutation-smoke.ts'))],
+        ['L2.9', (r) => put(r, 'swarm.json', JSON.stringify({ ...JSON.parse(readFileSync(join(r, 'swarm.json'), 'utf8')), commands: {} }))],
         ['L2.7', (r) => put(r, 'swarm.json', JSON.stringify({ ...JSON.parse(readFileSync(join(r, 'swarm.json'), 'utf8')), review: { mode: 'bogus' } }))],
       ];
       for (const [id, mutate] of cases) {
@@ -167,6 +206,48 @@ describe('check-conformance', () => {
         if (id !== 'L2.4') assert.match(line(out, id) ?? '', /^✗/, `${id}\n${out}`);
         else assert.match(line(out, id) ?? '', /^✓/, out); // test/architecture.test.ts is a stub from the CLAUDE.md enforced paths
       }
+    });
+    it('L2.8 passes on the template ledger and fails on a malformed line, an unowned open high, or a bad sla block', () => {
+      const ok = run(full(), '--level', '2').stdout;
+      assert.match(line(ok, 'L2.8'), /^✓.*2 finding\(s\), 0 open/);
+      assert.match(line(ok, 'L2.9'), /^✓.*no land log yet/);
+      const a = full();
+      put(a, 'docs/audits/findings.jsonl', '{"id":"AUD-a","severity":"high"}\n');
+      assert.match(line(run(a, '--level', '2').stdout, 'L2.8'), /^✗.*findings\.jsonl:1 has a missing or invalid status, opened, sla_due/);
+      const b = full();
+      put(b, 'docs/audits/findings.jsonl', `${JSON.stringify({ id: 'AUD-a', severity: 'high', status: 'open', opened: '2026-10-01', sla_due: '2026-10-03' })}\n`);
+      assert.match(line(run(b, '--level', '2').stdout, 'L2.8'), /^✗.*without an owner: AUD-a/);
+      put(b, 'docs/audits/findings.jsonl', `${JSON.stringify({ id: 'AUD-a', severity: 'high', status: 'open', opened: '2026-10-01', sla_due: '2026-10-03', owner: 'ana' })}\n${JSON.stringify({ id: 'AUD-a', severity: 'high', status: 'closed', opened: '2026-10-01', sla_due: '2026-10-03' })}\n`);
+      assert.match(line(run(b, '--level', '2').stdout, 'L2.8'), /^✓/, 'the latest line of an id is its state; a closed high needs no owner');
+      const c = full();
+      put(c, 'swarm.json', JSON.stringify({ ...JSON.parse(readFileSync(join(c, 'swarm.json'), 'utf8')), findings: { sla: { high: 2 } } }));
+      assert.match(line(run(c, '--level', '2').stdout, 'L2.8'), /^✗.*findings\.sla/);
+    });
+    it('L2.9 needs commands.findings to resolve, and a land log (if any) whose latest land records `closes`', () => {
+      const a = full();
+      rmSync(join(a, 'scripts/dev/findings.ts'));
+      assert.match(line(run(a, '--level', '2').stdout, 'L2.9'), /^✗.*does not resolve/);
+      const b = full();
+      spawnSync('git', ['init', '-q', b]);
+      const log = join(b, '.git/myproject-land-log.jsonl');
+      writeFileSync(log, `${JSON.stringify({ result: 'landed', head: 'abc' })}\n`);
+      assert.match(line(run(b, '--level', '2').stdout, 'L2.9'), /^✗.*no `closes` field/);
+      writeFileSync(log, `${JSON.stringify({ result: 'landed', head: 'abc' })}\n${JSON.stringify({ result: 'landed', head: 'def', closes: [], refactor: false })}\n`);
+      assert.match(line(run(b, '--level', '2').stdout, 'L2.9'), /^✓.*records closes/);
+    });
+    it('the headline prints the closure stats line, also in --json', () => {
+      const r = full();
+      const today = new Date().toISOString().slice(0, 10);
+      const ago = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+      const rows = [
+        { id: 'AUD-a', severity: 'high', status: 'open', owner: 'ana', opened: ago(10), sla_due: ago(8) },
+        { id: 'AUD-b', severity: 'low', status: 'open', opened: ago(2), sla_due: ago(-58) },
+        { id: 'AUD-c', severity: 'low', status: 'closed', opened: ago(3), sla_due: ago(-57), closed: today },
+      ];
+      put(r, 'docs/audits/findings.jsonl', `${rows.map((x) => JSON.stringify(x)).join('\n')}\n`);
+      const out = run(r, '--level', '2').stdout;
+      assert.match(out, /^closure: open 2 · overdue 1 · median age 6d · closure 0\.33$/m);
+      assert.equal(JSON.parse(run(r, '--level', '2', '--json').stdout).closure.overdue, 1);
     });
     it('L3.1 and L3.5 fail without roadmap or draft ADRs', () => {
       const r = full();

@@ -9,7 +9,17 @@
  *
  * Ratchets (`ratchets.ts`): the full tier runs them as the last serial step, after the tests, because the coverage
  * ratchet reads the summary the test step writes; serial steps run in their config order. The quick tier checks only
- * the file-size ratchet, on the changed files. `land` tightens the ratchets file after a green full run.
+ * the file-size and silent-error ratchets, on the changed files. `land` tightens the ratchets file after a green full
+ * run.
+ *
+ * Formatter (`format` step, both tiers): `config.format.check` on the whole repo in the full tier (it must exit
+ * non-zero when something is unformatted; Biome does), `config.format.quickCheck` plus the changed files in the quick
+ * tier. A formatter that is installed but switched off is not a gate: the reference project had it off and 3,232 lines
+ * over 200 characters. The step lists live in dev-flow.config.ts and read the same commands from `config.format`.
+ *
+ * Dependencies (`deps` step, full tier, serial, last): `deps-audit.ts` runs the stack's audit as JSON and fails on a
+ * critical or high advisory unless `deps-allowlist.json` has an unexpired entry for it. It needs the network, so the
+ * quick tier does not run it.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';

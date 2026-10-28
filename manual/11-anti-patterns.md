@@ -35,6 +35,14 @@ incident.
 | **Test that needs credentials** | CI red without secrets; "add the token to CI" | mock/replay; if it needs keys, the test is badly designed |
 | ★ **Blaming the code on a loaded machine** | 20 s timeouts with load 30 and swap at 90 % | `uptime` first; rerun only the failing files; queue lands; `gc` and `reap` |
 
+## Code and dependencies
+
+| Anti-pattern | Symptom | Fix |
+| --- | --- | --- |
+| ★ **The swallowed error** | 192 `catch {}` without a variable plus 86 `.catch(() => undefined)` against 38 `logger.error/warn` in the whole product; a worker that "guarantees nothing stays running" swallowed the failure of its own closing routine and nobody saw it | log with context, rethrow typed or return a Result; the `silentErrors` ratchet records today's count and only lets it fall; the architecture-test rule covers repos without ratchets |
+| ★ **The CVE that waits for a convenient moment** | 21 known vulnerabilities and no gate running the package manager's audit; every check green while the list grew, because "we'll upgrade when there is time" has no date | a `deps` step in the full `verify` that fails on high/critical; exceptions in `deps-allowlist.json` with reason, owner and expiry, so waiting is a dated, visible decision |
+| ★ **Formatter installed but switched off** | 3,232 lines over 200 characters; reviews argue about whitespace and every refactor diff is noise | the `format` step in both `verify` tiers; one `chore: format` land, listed in `.git-blame-ignore-revs` |
+
 ## Architecture and documentation
 
 | Anti-pattern | Symptom | Fix |

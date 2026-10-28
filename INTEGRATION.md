@@ -12,7 +12,7 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
 ```json
 {
   "protocol": "swarm",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "level": 2,
   "integrationBranch": "main",
   "commands": {
@@ -24,8 +24,10 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
     "land": "pnpm land",
     "newAdr": "docs/adr/draft-<slug>.md",
     "audit": "pnpm audit:repo",
-    "ratchets": "node scripts/dev/ratchets.ts"
+    "ratchets": "node scripts/dev/ratchets.ts",
+    "findings": "node scripts/dev/findings.ts"
   },
+  "findings": { "file": "docs/audits/findings.jsonl", "sla": { "high": 2, "medium": 14, "low": 60 }, "closureEvery": 3 },
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup",
     "stop": "node scripts/dev/wt.ts wip"
@@ -51,11 +53,24 @@ after the conformance checks for that level pass (§6).
 | `commands.newAdr` | level 2 | A command, or a path pattern for draft ADRs. |
 | `commands.audit` | level 3 | Offline debt metrics. |
 | `commands.ratchets` | required from level 1 (L1.6) | Checks `quality-ratchets.json`; with `--tighten`, rewrites it to the current values, only tightening. Default `node scripts/dev/ratchets.ts`. |
+| `commands.findings` | level 2 (L2.9) | The findings ledger CLI: `add`, `close`, `accept`, `list`, `check`, `stats`. Default `node scripts/dev/findings.ts`. |
+| `findings` | level 2 (L2.8, L2.9) | `{ file, sla, closureEvery }`: the ledger path (default `docs/audits/findings.jsonl`), days to close by severity (defaults 2 / 14 / 60) and the closure quota N (default 3). `land` reads it from the integration branch. |
+| `roadmap` | level 3 (L3.6) | `{ maxActive, staleDays }`: active changes allowed at once (default 12) and days without a ticked task before a change counts as stale (default 14) unless its proposal carries `parked: <reason>`. The roadmap validator enforces both inside `verify`. |
 | `gates` | optional | Extra file globs whose edits trigger the quality-gate warning. |
 | `review.mode`, `review.sensitive` | optional (L2.7) | When `land` requires a review receipt: `always`, `sensitive` (default: only if a changed path matches a `sensitive` glob) or `off`. Read from the integration branch, so a branch cannot relax its own gate. Template default: `sensitive`, with globs for auth, payments, migrations, CI, quality gates and settings. |
 
 Missing keys fall back to the defaults in the template (Node and pnpm). A skill that uses a fallback says so in its
 output, so a non-Node project notices immediately.
+
+**Findings ledger.** Every problem an audit, a review, an incident or CI finds goes into one append-only JSONL file
+(`findings.file`), one object per line: `{ id, severity: high|medium|low, title, file, line?, source:
+audit|review|incident|ci, opened, owner?, sla_due, status: open|closed|accepted, closed?, closed_by?, reason?,
+introduced?: <sha>|"unknown", detected, catchable_at_review?, dc?: "DC-xxx" }`, dates as `YYYY-MM-DD`. A status change
+is a new line with the same `id` (the latest line is the state), like every ledger of the protocol; `sla_due` is
+`opened` plus the days of `findings.sla` for the severity. `accepted` is a signed risk (`reason` required): it counts as
+closed for the gate and is reported apart. The point is to measure and force *closure*, not detection: the reference
+project found 32 audit findings and left about 20 of them open for ten days. Example: [templates/docs/audits/findings.jsonl](templates/docs/audits/findings.jsonl);
+specification and Node implementation: [reference/README.md](reference/README.md) (findings).
 
 **Review receipt.** The proof of a per-change review that `land` checks (L2.7). One JSON file per change, written by
 the `review` skill once the branch is committed and triaged, at `<git-common-dir>/swarm-reviews/<patch_id>.json`
@@ -84,9 +99,12 @@ The names are free; the behaviour is the contract. Every guarantee below is some
 | `verifyQuick` | Run the steps affected by the diff against the integration branch, plus the structural tests. Finish in seconds to a few minutes. | Be accepted as the gate that closes a task. |
 | `commit` | Absorb a pending `wip:` commit and commit everything with the given message. | Push. |
 | `status` | List worktrees and branches with unintegrated work, dirty state and age. | Change anything. |
-| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. After the rebase and before verify, refuse a change without a passing review receipt for its patch id when `review.mode` requires it; `--no-review "<reason>"` skips that check and logs the reason. The verification is never replaced by an environment variable outside the reference's own self-tests; if one is honoured there, the land log says `verify: "overridden"`. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
-| `audit` | Run offline with no spend, print metrics, optionally store a snapshot for deltas. | Fix anything. |
+| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. After the rebase and before verify, refuse a change without a passing review receipt for its patch id when `review.mode` requires it; `--no-review "<reason>"` skips that check and logs the reason. Next, before verify, two findings gates read the ledger **from the integration branch**: an open HIGH past its `sla_due` blocks the land unless a commit of the branch carries `Closes: <id>` for every one of them, and when none of the last `closureEvery` lands (any branch) closed a finding, this land must close one (`Closes: <id>` trailer, or a `fix(AUD-…)` subject) or be a `refactor:` (while any finding is open); `--override-findings "<reason>"` skips both and logs `findings-overridden` with the reason. After a green verify each `Closes: <id>` appends a `closed` line (`closed_by` = that commit) in a commit on top of the verified SHA that touches only the ledger (and the ratchets file, as one commit, when both changed). Each `landed` log entry records `closes: [ids]` and `refactor`. The verification is never replaced by an environment variable outside the reference's own self-tests; if one is honoured there, the land log says `verify: "overridden"`. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
+| `audit` | Run offline with no spend, print metrics, optionally store a snapshot for deltas. The table opens with a **Closure** block (open findings by severity, overdue, median open age, opened and closed in 14 days, closure ratio, accepted risks) and **Hot files** (files with several `fix` commits in a month that are also over the size limit); `--write` stores both in the snapshot. | Fix anything. |
+| `findings` | Keep the append-only ledger: `add` (one finding, with severity, file, source, owner and `dc`), `close <id>`, `accept <id> --reason`, `list`, `stats`, and `check`, which exits 1 if and only if an open HIGH is past its `sla_due`, naming each and its days overdue (overdue mediums only warn). A status change is a new line, never an edit. | Delete or rewrite a line; close a finding without recording who or what closed it. |
 | `ratchets` | Check `quality-ratchets.json`: no new file over the size limit and no exception above its recorded size; measured coverage neither below the floor nor more than `maxGap` above it; lint warnings within budget. Run last in the full `verify` (after the tests, which write the coverage summary); the quick tier checks file size on the changed files only. With `--tighten` (run by `land` after a green verify), move every value to the measured one in the tightening direction only; `land` commits the file alone on top of the verified SHA and aborts if that commit touches anything else. `check` also compares the file with the integration branch's copy (merge base) and fails on any loosening: new or larger exception, higher `max`, higher budget, lower floor, higher `maxGap`, narrower `include`; the file is a sensitive path of the review gate. | Loosen a value (add an exception, lower a floor, raise a budget), or change any other file. |
+| `deps-audit` | Run the stack's dependency audit as JSON (`deps.command`), normalise it, and exit 1 on any advisory at a `deps.failOn` severity (default critical, high) that `deps-allowlist.json` does not list with a reason, an owner and an unexpired date; an expired entry fails again; an advisory with no severity counts as high. Serial, last step of the full tier and a CI step. | Pass when the audit printed no JSON (network down counts as a failure, not a pass). |
+| `mutation-smoke` | For each changed source file with related tests, apply a few mutations (`>=`/`<=`, `===`, `&&`/`||`, early `return`) one at a time and run those tests; restore the original on every exit path. Report each file whose mutants all survive and each changed file with no related test as "not proven". `mode: warn` reports; `mode: fail` exits 1. | Leave a mutated file on disk; claim a red baseline as a kill. |
 | `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
 | `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout, during a rebase or merge, or while a `land` of its branch is running. |
 
@@ -172,6 +190,9 @@ list by hand.
 | L1.4 | Coverage floor | a threshold is configured and enforced by the test step. |
 | L1.5 | No secrets in CI | the quality job reads no secrets. |
 | L1.6 | Ratchets | Level 1: `quality-ratchets.json` exists and covers file size, coverage gap and lint budget; `verify` runs the check; nothing is loosened compared with the integration branch. Level 2 adds: `land` tightens it and commits only that file. |
+| L1.7 | Dependency gate | `deps-allowlist.json` exists, parses, and every entry has a reason, an owner and an unexpired `expires`; a dependency audit exists (`scripts/**/deps-audit.*`, or CI, `package.json`, Makefile or pyproject naming `npm`/`pnpm audit`, `pip-audit`, `cargo audit`, `govulncheck` or `osv-scanner`); its run inside `verify` shows in L1.1's output. |
+| L1.8 | Formatter | a formatter is configured and not disabled (`biome.json` formatter, prettier, ruff/black, rustfmt, gofmt) or a format step is named in CI, `package.json`, Makefile or pyproject; `verify` runs the check in both tiers (L1.1). |
+| L1.9 | Silent errors | `quality-ratchets.json` has a `silentErrors` section (`dirs`, `exceptions`, `total`) and the total only goes down; a new `catch {}` that neither throws, calls nor uses its binding fails `ratchets`. |
 | L2.1 | Worktrees | the worktree directory is gitignored; the session start hook or §5 step 1 is documented. |
 | L2.2 | Session commands | `commands.commit`, `status` and `land` resolve to existing scripts. |
 | L2.3 | Protected integration | a `pre-push` publisher guard is installed (`git config core.hooksPath`) or branch protection is on. |
@@ -179,16 +200,25 @@ list by hand.
 | L2.5 | Docs as tests | a docs test runs inside `verify` and checks both directions: links, cited paths and functions exist; every module, package or app, CLI command, extension guide (docs index) and ADR (ADR index) is documented; every invariant id in the table has a test and every tested id is in the table; prose uses one invariant numbering (no `INV-1` for `INV-01`). |
 | L2.6 | Non-Claude agents | `AGENTS.md` exists and states the §5 session protocol, or points to `CLAUDE.md` which does. |
 | L2.7 | Review gate | `land` requires a passing review receipt per `review.mode` (default `sensitive`) and the `review` skill writes receipts: a change touching a sensitive path, with no receipt, is refused with "run /swarm:review". In PR mode, a required review by CODEOWNERS in which the reviewer attaches the `reviewer` agent's report counts as the receipt. |
+| L2.8 | Findings ledger | the ledger at `findings.file` exists and every line parses (id, severity, status, `opened`, `sla_due`); every open HIGH has an `owner` and an `sla_due`; `findings.sla`, if present, gives positive days for the three severities. |
+| L2.9 | Closure gate | `commands.findings` resolves to an existing script, and `land` enforces the SLA gate and the closure quota (structure only: the land log, when it exists, shows `closes` on its latest `landed` entry). |
+| L2.10 | Mutation smoke | a `mutation-smoke.*` script exists under `scripts/` and runs as a serial step of the full tier (L1.1); `--mode fail` on a file whose tests cannot fail exits 1 (proven by the reference self-tests). |
 | L3.1 | Roadmap | a roadmap file exists and its validator runs inside `verify`. |
 | L3.2 | Audit | `commands.audit` runs offline and exits 0. |
 | L3.3 | Fresh audit | the latest audit report is under 14 days old. |
 | L3.4 | Scheduled review | a scheduled review exists (CI workflow or a `/schedule` routine named in `CLAUDE.md`). |
 | L3.5 | Conflict-free ADRs | new ADRs are drafts numbered at integration time. |
+| L3.6 | WIP limit | the active changes in the changes directory are at most `roadmap.maxActive` (default 12); the roadmap validator inside `verify` also fails a change with no task ticked for `roadmap.staleDays` (default 14) unless its proposal says `parked: <reason>`. |
 
 Output format:
 
+When the ledger exists, a headline line follows the first one at any level: `closure: open 12 · overdue 2 · median age 9d ·
+closure 0.6` (open findings, how many are past their SLA, median age of the open ones, closed / opened over the last
+14 days). It is information; only L2.8 and L2.9 can fail.
+
 ```text
-swarm check · level 1 · protocol 0.3.1
+swarm check · level 1 · protocol 0.4.0
+closure: open 12 · overdue 2 · median age 9d · closure 0.6
 ✓ L0.1 Manifest            swarm.json ok (level 0)
 ✓ L0.2 Agent memory        CLAUDE.md 142 lines, names "make verify"
 ✗ L1.3 CI parity           .github/workflows/ci.yml runs "pytest" but not "make verify"
@@ -212,7 +242,7 @@ manual chapter 12.
 | X5 | Handover checklist | `docs/handover/checklist.md` exists, copied from the protocol's checklist, and names the current owning team. |
 
 ```text
-swarm check · transfer · protocol 0.3.1
+swarm check · transfer · protocol 0.4.0
 ✓ X1 Fresh clone           fresh-clone.yml green 2026-10-26 (2 days)
 ✗ X2 New-agent test        last report 2026-09-14 (44 days), verdict pass
 ✓ X3 Explicit ownership    CODEOWNERS 14 rules · runbook 7/7 sections · dependencies 6 services

@@ -6,6 +6,7 @@
  *
  *   node ratchets.ts                        check everything (the full verify tier runs it after the tests)
  *   node ratchets.ts --size-only [files…]   only the file-size ratchet, on the given files (the quick tier)
+ *   node ratchets.ts --silent-only [files…] only the silent-error ratchet, per file (the quick tier; no total)
  *   node ratchets.ts --tighten              rewrite the file to the current values, only ever tightening (land runs it)
  *   node ratchets.ts --init [template]      record the current state in the file (shape: the template, the uncommitted
  *                                           file itself, or a built-in default); refused once the file is committed
@@ -15,13 +16,28 @@
  * behind does not look loosened) and fails on any loosening: the measurements are only as honest as the numbers they
  * are compared with, and an edit that raises a budget or adds an exception would otherwise turn every gate green.
  *
- * The file (`quality-ratchets.json`, template in templates/) has three optional sections:
+ * The file (`quality-ratchets.json`, template in templates/) has four optional sections:
  *   fileSize      { max, include, exclude?, exceptions: { "<path>": <lines> } }   new files over max fail; an exception
  *                 that grew past its recorded size fails; recorded sizes only go down.
  *   coverage      { summary, floor | floorFrom, maxGap }   measured below the floor fails; measured more than maxGap
  *                 above it fails too ("raise the floor to X"). `floorFrom` reads the thresholds from the test runner
  *                 config instead, which then stays the single source (tighten does not touch it).
  *   lintWarnings  { command, budget, perRule? }   warnings counted from the linter's JSON output (Biome or ESLint).
+ *   silentErrors  { dirs, exceptions: { "<path>": <count> }, total }   errors swallowed without a trace (below); a new
+ *                 silent catch fails with its file:line, recorded counts and the total only go down.
+ *
+ * Silent errors. In the reference project 192 `catch {}` without a variable and 86 `.catch(() => undefined)` sat next
+ * to 38 `logger.error/warn` calls in the whole product: failures vanished without telemetry, and a worker that
+ * "guarantees nothing stays running" swallowed the failure of its own closing routine. The detector is pragmatic and
+ * text-based (comments and string contents are masked first; no parser, so a regex literal holding a quote can mislead
+ * it). It counts, in `dirs` (test files and `.d.ts` excluded):
+ *   (a) a `catch` block that has no `throw`, makes no call, never uses its binding and returns at most a literal:
+ *       empty, comment-only, `return undefined|null|false|0|''|[]|{}`, `continue`, `break`, a bare assignment;
+ *   (b) `.catch(() => <undefined|null|false|true|number|''|[]|{}>)`, `.catch(() => {})` and `.catch(noop)`.
+ * Two idioms are accepted and NOT counted, because the failure leaves a trace: a catch that logs (`logger.warn(...)`
+ * or any call that can carry the error: the detector does not judge what the call does) and a catch that rethrows
+ * (a typed error with the original as `cause`). A catch that returns an error value (`return err`, `Result.err(e)`)
+ * is accepted too. To fix a counted one: log with context, rethrow typed, or return a Result.
  *
  * No dependencies beyond `node:*`.
  */
@@ -59,10 +75,20 @@ export interface LintRatchet {
   perRule?: Record<string, number>;
 }
 
+export interface SilentErrorsRatchet {
+  /** Folders scanned (prefix match on repo-relative paths), e.g. `src/`. */
+  dirs: string[];
+  /** Silent catches per file recorded today; a count only goes down and a file with none is not listed. */
+  exceptions: Record<string, number>;
+  /** Sum of the recorded counts; only goes down. */
+  total: number;
+}
+
 export interface Ratchets {
   fileSize?: FileSizeRatchet;
   coverage?: CoverageRatchet;
   lintWarnings?: LintRatchet;
+  silentErrors?: SilentErrorsRatchet;
   [other: string]: unknown;
 }
 
@@ -73,10 +99,13 @@ export interface Measured {
   /** The floor read from `floorFrom`, when the file does not hold it. */
   externalFloor?: CoverageNumbers;
   lint?: { warnings: number; rules: Record<string, number> };
+  /** Silent catches per file (1-based lines); `silentPartial` when only some files were scanned (the quick tier). */
+  silent?: { file: string; lines: number[] }[];
+  silentPartial?: boolean;
 }
 
 export interface Problem {
-  ratchet: 'fileSize' | 'coverage' | 'lintWarnings' | 'baseline';
+  ratchet: 'fileSize' | 'coverage' | 'lintWarnings' | 'silentErrors' | 'baseline';
   message: string;
 }
 
@@ -198,11 +227,116 @@ export function checkLint(r: LintRatchet, lint: { warnings: number; rules: Recor
   return problems;
 }
 
+/** Comments and string contents replaced by spaces (newlines kept): a catch in a comment or a string is not code. */
+export function maskSource(text: string): string {
+  let out = '';
+  let i = 0;
+  const blank = (c: string) => (c === '\n' ? '\n' : ' ');
+  while (i < text.length) {
+    const c = text[i] as string;
+    const next = text[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') out += blank(text[i++] as string);
+    } else if (c === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      const stop = end < 0 ? text.length : end + 2;
+      while (i < stop) out += blank(text[i++] as string);
+    } else if (c === "'" || c === '"' || c === '`') {
+      out += c;
+      i++;
+      // A template's `${…}` is masked with the rest of it: code inside interpolations is not scanned
+      while (i < text.length && text[i] !== c && (c === '`' || text[i] !== '\n')) {
+        if (text[i] === '\\') out += blank(text[i++] as string);
+        if (i < text.length) out += blank(text[i++] as string);
+      }
+      if (i < text.length) out += text[i++];
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+const LITERAL = String.raw`undefined|null|false|true|void 0|-?\d[\d_.]*|'\s*'|"\s*"|\`\s*\`|\[\s*\]|\{\s*\}|\(\s*\{\s*\}\s*\)|\(\s*\[\s*\]\s*\)`;
+const LITERAL_RE = new RegExp(`^(?:${LITERAL})$`);
+const PROMISE_SWALLOW = new RegExp(
+  String.raw`\.catch\(\s*(?:noop|(?:async\s*)?(?:\(\s*[\w$]*\s*\)|[\w$]+)\s*=>\s*(?:${LITERAL}|\{\s*\})|function\s*\([^()]*\)\s*\{\s*\})\s*\)`,
+  'g',
+);
+
+/** Is the body of a `catch` a swallow? No throw, no call, binding unused, and nothing returned but a literal. */
+function isSilentBody(body: string, binding: string | undefined): boolean {
+  if (/\bthrow\b/.test(body)) return false;
+  // `if (x)` and friends are not calls
+  if (/[\w$)\]>]\s*\(|\?\.\s*\(/.test(body.replace(/\b(?:else\s+if|if|for|while|switch|return|typeof|await|void)\s*\(/g, '('))) return false;
+  if (binding && new RegExp(`(?<![\\w$.])${binding.replaceAll('$', '\\$')}(?![\\w$])`).test(body)) return false;
+  for (const m of body.matchAll(/\breturn\b([^;\n]*)/g)) {
+    const expr = (m[1] ?? '').trim();
+    if (expr !== '' && !LITERAL_RE.test(expr)) return false;
+  }
+  return true;
+}
+
+/** 1-based lines of the silent catches in one source file (see the header for what counts). */
+export function findSilentCatches(text: string): number[] {
+  const masked = maskSource(text);
+  const lineAt = (index: number) => masked.slice(0, index).split('\n').length;
+  const lines: number[] = [];
+  for (const m of masked.matchAll(/\bcatch\s*(?:\(([^()]*)\))?\s*\{/g)) {
+    const param = m[1] ?? '';
+    // `.catch(e => {` and `.catch(function (e) {` are promise handlers, not catch clauses
+    if (param.includes('=>') || /\bfunction\b/.test(param)) continue;
+    const open = (m.index ?? 0) + m[0].length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let i = open; i < masked.length; i++) {
+      if (masked[i] === '{') depth++;
+      else if (masked[i] === '}' && --depth === 0) {
+        close = i;
+        break;
+      }
+    }
+    if (close < 0) continue;
+    const binding = /^\s*([A-Za-z_$][\w$]*)/.exec(param)?.[1];
+    if (isSilentBody(masked.slice(open + 1, close), binding)) lines.push(lineAt(m.index ?? 0));
+  }
+  for (const m of masked.matchAll(PROMISE_SWALLOW)) lines.push(lineAt(m.index ?? 0));
+  return lines.sort((a, b) => a - b);
+}
+
+const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+const TEST_OR_TYPES = /(?:\.test\.|\.spec\.|\.d\.[cm]?ts$)/;
+
+export function inSilentScope(r: SilentErrorsRatchet, path: string): boolean {
+  return SOURCE_FILE.test(path) && !TEST_OR_TYPES.test(path) && r.dirs.some((d) => path.startsWith(d.endsWith('/') ? d : `${d}/`));
+}
+
+export function checkSilentErrors(r: SilentErrorsRatchet, found: { file: string; lines: number[] }[], partial = false): Problem[] {
+  const problems: Problem[] = [];
+  for (const f of found) {
+    const recorded = r.exceptions[f.file] ?? 0;
+    if (f.lines.length <= recorded) continue;
+    const where = f.lines.map((l) => `${f.file}:${l}`).join(', ');
+    problems.push({
+      ratchet: 'silentErrors',
+      message: `${f.file} has ${f.lines.length} silent catch(es) (recorded ${recorded}): ${where}; log it with context, rethrow a typed error or return a Result (a catch that logs or rethrows is not counted)`,
+    });
+  }
+  // A partial scan (quick tier) sees only some files, so the total is judged by the full run
+  if (!partial) {
+    const total = found.reduce((n, f) => n + f.lines.length, 0);
+    if (total > r.total) problems.push({ ratchet: 'silentErrors', message: `${total} silent catches in ${r.dirs.join(', ')}, total recorded ${r.total}: the total only goes down` });
+  }
+  return problems;
+}
+
 export function check(r: Ratchets, m: Measured): Problem[] {
   return [
     ...(r.fileSize && m.files ? checkFileSize(r.fileSize, m.files) : []),
     ...(r.coverage && m.coverage ? checkCoverage(r.coverage, m.coverage, r.coverage.floor ?? m.externalFloor ?? {}) : []),
     ...(r.lintWarnings && m.lint ? checkLint(r.lintWarnings, m.lint) : []),
+    ...(r.silentErrors && m.silent ? checkSilentErrors(r.silentErrors, m.silent, m.silentPartial) : []),
   ];
 }
 
@@ -255,6 +389,20 @@ export function loosened(baseline: Ratchets, now: Ratchets): string[] {
         const is = nl.perRule?.[rule];
         if (is === undefined) out.push(`lintWarnings budget for ${rule} removed`);
         else if (is > was) out.push(`lintWarnings ${rule} ${was} → ${is}`);
+      }
+    }
+  }
+  const bs = baseline.silentErrors;
+  if (bs) {
+    const ns = now.silentErrors;
+    if (!ns) out.push('silentErrors section removed');
+    else {
+      if (ns.total > bs.total) out.push(`silentErrors.total ${bs.total} → ${ns.total}`);
+      for (const d of bs.dirs) if (!ns.dirs.includes(d)) out.push(`silentErrors.dirs lost "${d}"`);
+      for (const [path, count] of Object.entries(ns.exceptions)) {
+        const was = bs.exceptions[path];
+        if (was === undefined) out.push(`new silentErrors exception ${path} (${count})`);
+        else if (count > was) out.push(`silentErrors exception ${path} ${was} → ${count}`);
       }
     }
   }
@@ -313,6 +461,21 @@ export function tighten(r: Ratchets, m: Measured): { next: Ratchets; changes: st
     }
     next.lintWarnings = lint;
   }
+  if (r.silentErrors && m.silent && !m.silentPartial) {
+    const now = new Map(m.silent.map((f) => [f.file, f.lines.length]));
+    const exceptions: Record<string, number> = {};
+    for (const [path, recorded] of Object.entries(r.silentErrors.exceptions).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const n = now.get(path) ?? 0;
+      if (n === 0) changes.push(`silentErrors: ${path} has no silent catch left`);
+      else if (n < recorded) {
+        exceptions[path] = n;
+        changes.push(`silentErrors: ${path} ${recorded} → ${n}`);
+      } else exceptions[path] = recorded;
+    }
+    const total = Math.min(r.silentErrors.total, [...now.values()].reduce((a, b) => a + b, 0));
+    if (total < r.silentErrors.total) changes.push(`silentErrors: total ${r.silentErrors.total} → ${total}`);
+    next.silentErrors = { ...r.silentErrors, exceptions, total };
+  }
   return { next, changes };
 }
 
@@ -329,6 +492,10 @@ export function initial(template: Ratchets, m: Measured): Ratchets {
     const floor: CoverageNumbers = {};
     for (const k of COVERAGE_KEYS) if (m.coverage[k] !== undefined) floor[k] = targetFloor(m.coverage[k] as number, c.maxGap);
     next.coverage = { ...c, floor };
+  }
+  if (template.silentErrors && m.silent) {
+    const found = m.silent.filter((f) => f.lines.length).sort((a, b) => a.file.localeCompare(b.file));
+    next.silentErrors = { ...template.silentErrors, exceptions: Object.fromEntries(found.map((f) => [f.file, f.lines.length])), total: found.reduce((n, f) => n + f.lines.length, 0) };
   }
   if (template.lintWarnings && m.lint) next.lintWarnings = { ...template.lintWarnings, budget: m.lint.warnings, perRule: { ...m.lint.rules } };
   return next;
@@ -377,15 +544,24 @@ export function runLint(root: string, command: string): { warnings: number; rule
   return countLintWarnings(r.stdout ?? '');
 }
 
+export function measureSilent(root: string, r: SilentErrorsRatchet, only?: string[]): { file: string; lines: number[] }[] {
+  return (only ?? repoFiles(root))
+    .filter((p) => inSilentScope(r, p) && existsSync(join(root, p)))
+    .map((file) => ({ file, lines: findSilentCatches(readFileSync(join(root, file), 'utf8')) }))
+    .filter((f) => f.lines.length);
+}
+
+type Section = 'fileSize' | 'coverage' | 'lintWarnings' | 'silentErrors';
+
 export interface MeasureOptions {
   /** Only these sections. */
-  sections?: ('fileSize' | 'coverage' | 'lintWarnings')[];
-  /** Restrict the file-size ratchet to these paths (quick tier). */
+  sections?: Section[];
+  /** Restrict the file-size and silent-error ratchets to these paths (quick tier). */
   files?: string[];
 }
 
 export function measure(root: string, r: Ratchets, opts: MeasureOptions = {}): Measured {
-  const want = (s: 'fileSize' | 'coverage' | 'lintWarnings') => !opts.sections || opts.sections.includes(s);
+  const want = (s: Section) => !opts.sections || opts.sections.includes(s);
   const m: Measured = {};
   if (r.fileSize && want('fileSize')) m.files = measureFiles(root, r.fileSize, opts.files);
   if (r.coverage && want('coverage')) {
@@ -393,6 +569,10 @@ export function measure(root: string, r: Ratchets, opts: MeasureOptions = {}): M
     if (r.coverage.floorFrom) m.externalFloor = readFloorFrom(join(root, r.coverage.floorFrom));
   }
   if (r.lintWarnings && want('lintWarnings')) m.lint = runLint(root, r.lintWarnings.command);
+  if (r.silentErrors && want('silentErrors')) {
+    m.silent = measureSilent(root, r.silentErrors, opts.files);
+    m.silentPartial = opts.files !== undefined;
+  }
   return m;
 }
 
@@ -483,12 +663,16 @@ export function main(argv: string[], cwd = process.cwd(), log: (line: string) =>
     return 0;
   }
 
+  // Quick tier: `--size-only` (file size) and `--silent-only` (silent catches), each on the given files
   const sizeOnly = argv.includes('--size-only');
-  const m = measure(root, r, sizeOnly ? { sections: ['fileSize'], files: positional.length ? positional : undefined } : {});
+  const silentOnly = argv.includes('--silent-only');
+  const scoped = sizeOnly || silentOnly;
+  const sections: Section[] = [...(sizeOnly ? (['fileSize'] as const) : []), ...(silentOnly ? (['silentErrors'] as const) : [])];
+  const m = measure(root, r, scoped ? { sections, files: positional.length ? positional : undefined } : {});
   const problems = [...baselineProblems(root, file, r), ...check(r, m)];
-  if (!sizeOnly && r.coverage && !m.coverage) problems.push({ ratchet: 'coverage', message: `no coverage summary at ${r.coverage.summary}: run the tests with coverage (json-summary reporter) first` });
+  if (!scoped && r.coverage && !m.coverage) problems.push({ ratchet: 'coverage', message: `no coverage summary at ${r.coverage.summary}: run the tests with coverage (json-summary reporter) first` });
   for (const p of problems) log(`✗ ${p.ratchet}: ${p.message}`);
-  const checked = sizeOnly ? 'fileSize' : (['fileSize', 'coverage', 'lintWarnings'] as const).filter((s) => r[s]).join(', ');
+  const checked = (scoped ? sections : (['fileSize', 'coverage', 'lintWarnings', 'silentErrors'] as const).filter((s) => r[s])).join(', ');
   log(problems.length ? `✗ ratchets: ${problems.length} problem(s)` : `✓ ratchets: ${checked} within bounds`);
   return problems.length ? 1 : 0;
 }
@@ -498,6 +682,7 @@ const DEFAULT_TEMPLATE: Ratchets = {
   fileSize: { max: 500, include: ['**/*.{ts,tsx}'], exclude: ['**/*.test.{ts,tsx}', '**/*.d.ts', `${config.playgroundDir}/**`], exceptions: {} },
   coverage: { summary: config.audit.coverageSummaryFile, floor: {}, maxGap: 1 },
   lintWarnings: { command: config.audit.lintJsonCmd.join(' '), budget: 0 },
+  silentErrors: { dirs: ['src/'], exceptions: {}, total: 0 },
 };
 
 if (import.meta.main) process.exit(main(process.argv.slice(2)));

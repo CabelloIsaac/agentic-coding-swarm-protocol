@@ -465,6 +465,48 @@ factory, and add the "only the repository deletes" test.
 
 ---
 
+## 16. State transitions need compare-and-swap
+
+**Rule.** A state transition on a shared record is one atomic step that says "from this state to that one", never a
+read, a check and a write. A budget reservation lives in the store every worker shares, not in a process. Recovery
+closes work by the run that owns it, not by a list of job types.
+
+**Why.** An analysis of the reference project (517 test files, none with two concurrent callers) found three shapes of
+the same blind spot:
+
+- **Read-check-append on an append-only ledger (section 9).** `approve(id)` read the last event, checked it was
+  `awaiting_approval`, then appended `approved`. Nothing was locked, so two reviewers (or a double click, or a retry)
+  both passed the check, both appended, and the action's external effect ran twice. Append-only protects the history;
+  it does not make the check-then-append atomic. The same shape was in a state machine that read the last event and
+  appended the next one.
+- **A reservation held in memory.** Budget reservations were kept in a map in the worker process. They died with the
+  process (a restart released every hold at once) and two workers each saw the whole budget free, so the tenant
+  spent up to twice its cap. The in-process mutex around the map was correct and beside the point.
+- **Recovery that enumerates types.** The sweep that closed jobs left running by a dead worker listed the job types
+  it knew by name. A type added later was not in the list, so its jobs stayed `running` forever, holding their slot.
+
+**How to enforce it.**
+
+- The ledger port gets a conditional append: `appendIf(id, expectedStatus, event)`. It appends only if the current
+  status of `id` is `expectedStatus` and reports whether it did. In SQL that is a single statement,
+  `UPDATE … SET status = $new WHERE id = $id AND status = $expected` (or an insert guarded by a unique index on
+  `(id, from_status)`), and zero rows affected means somebody else won. A file ledger needs the same guarantee from a
+  lock: take the file lock, re-read the current state **inside** it, append, release; the lock lives in the ledger
+  method so no caller can forget it. Every transition goes through `appendIf`; the loser gets a typed
+  `transition_conflict` and decides (usually: it is already done, return the winner's result).
+- Reservations are rows in the shared store (`INSERT … WHERE spent + $amount <= cap`), with an owner run and an
+  expiry, so a dead process's holds are visible and releasable and two workers cannot both fit.
+- Recovery closes by run: "every job whose run is in `running` with a stale heartbeat", whatever its type. A new job
+  type is covered the day it exists. A test registers a type the sweep has never heard of and expects it closed.
+- The test for any transition is two callers at once (chapter 04): `Promise.all([approve(id), approve(id)])`, assert
+  exactly one wins and exactly one event and one effect exist. It fails on the read-check-append version every time
+  the store yields between the read and the write, which is what a test double with an `await` does.
+
+**How to adopt it.** List the transitions of your ledgers (the transition tables of section 9 are the list). Give each
+one `appendIf`, then add its two-callers test; the test goes first and is red on the old code. Move any reservation
+or counter held in a variable to the shared store. Defect classes `DC-CONC-01`, `DC-CONC-02` and `DC-RUN-06` in
+`checklists/defect-classes.md` are the review checklist.
+
 ## Cross-cutting lessons
 
 - **Every boundary has a test.** Which invariants transfer as is, and which are domain-specific, is listed in

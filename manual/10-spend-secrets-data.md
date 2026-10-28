@@ -39,6 +39,33 @@ customer data is reversible and traceable.
   profiles are separate and documented.
 - Never print secrets in chat, memory or docs; a secret that shows up in a log is a secret to rotate.
 
+## Dependencies
+
+**Rule:** no known high or critical vulnerability in the dependencies without an allowlist entry that has a
+reason, an owner and an expiry date. Why: the reference project carried 21 known vulnerabilities and no gate ran
+the package manager's audit, so every gate was green while the list grew; each one waited for a convenient moment
+that never came.
+
+- **The gate.** `reference/scripts/deps-audit.ts` runs the stack's audit as JSON (`config.deps.command`; default
+  `pnpm audit --prod --json`; `npm audit --omit=dev --json`, `pip-audit -f json` and `cargo audit --json` are read
+  too, or wrap any other tool to print `{ vulnerabilities: [{ id, severity, package, title }] }`). It fails on the
+  severities in `deps.failOn` (default `critical`, `high`) and prints one line per failing advisory. It runs as a
+  serial step of the full `verify` tier and in CI; it needs the network, so the quick tier skips it. If the audit
+  command prints no JSON (registry down, offline) the gate fails: an audit that did not run is not a clean audit.
+  Production dependencies only by default: a dev-tool advisory is real but does not reach customers; widen the
+  command when you want it.
+- **The allowlist.** `deps-allowlist.json` (template in `templates/`) maps an advisory id (`GHSA-…`, `CVE-…`) or
+  `package@range` to `{ reason, expires: "YYYY-MM-DD", owner }`. A valid entry lets the advisory through and `verify`
+  prints it with its owner and date, so it stays visible; an expired entry fails with "allowlist entry expired";
+  an entry that matches nothing any more is reported so it gets deleted. Typical reasons: no fixed version exists
+  yet, the vulnerable code path is not reachable (say why), the upgrade is a planned change (cite it).
+- **Expiry is short.** Thirty days is a good default, ninety the maximum. A long expiry is a permanent exception
+  with extra steps. `deps-allowlist.json` is a review-gate path (add it to the sensitive globs): editing it is
+  weakening the gate.
+- **Who owns rotation.** The `owner` in each entry is a person (or the team's on-call), not "the team": they get
+  the red `verify` the day it expires and either upgrade, or renew with a new reason that someone else reviews.
+- **Upgrades are their own change.** Bump, run the full gate, land: not a rider on a feature.
+
 ## Data
 
 - Versioned seed data is read-only; tests run on copies (`PROJECT_ROOT=<copy>` pointing at a scratch directory).
@@ -64,6 +91,7 @@ disable the ones you do not need.
 
 ## What to copy into your repo
 
-The `.env` rejection in `land`, the `deny` rules in `settings.json` (`templates/claude/settings.json`), the image
+`reference/scripts/deps-audit.ts` with `templates/deps-allowlist.json`,
+the `.env` rejection in `land`, the `deny` rules in `settings.json` (`templates/claude/settings.json`), the image
 check in CI (`templates/github/workflows/ci.yml`), the mock/replay pattern with recording, and the rule
 "destructive = versioned and traceable" in the storage layer.

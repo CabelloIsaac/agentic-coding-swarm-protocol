@@ -13,13 +13,13 @@ only what changed since the last report (or the uncommitted work if there is non
 dimension alone.
 
 **Resolve the commands first.** Read `swarm.json` at the repo root: `{audit}` is `commands.audit` (fallback
-`pnpm audit:repo`), `{commit}` and `{land}` as in the `land` skill. Contract: [INTEGRATION.md](../../INTEGRATION.md).
+`pnpm audit:repo`), `{findings}` is `commands.findings` (fallback `node scripts/dev/findings.ts`), `{commit}` and `{land}` as in the `land` skill. Contract: [INTEGRATION.md](../../INTEGRATION.md).
 Lint, typecheck, structural tests, domain validators, spec validation and the dependency audit use the repo's own
 commands from `CLAUDE.md`; [checks.md](checks.md) shows the pnpm defaults.
 
 ## The gates
 
-1. **Read-only.** Fix nothing, commit only the report and its metrics file, spend nothing (no `.env`, mock modes).
+1. **Read-only.** Fix nothing, commit only the report, its metrics file and the ledger lines (`{findings} add`), spend nothing (no `.env`, mock modes).
 2. **Every high finding is re-checked by you in the code** before it enters the report, and its severity is
    recalibrated. Subagents get things wrong in both directions.
 3. **No debt metric rises without a written reason** in the report.
@@ -58,7 +58,7 @@ every gate green). Reports kept outside the repo left nothing to compare against
 
 3. **Subagents.** One read-only agent per dimension in the mode, all launched in **one message**. Each prompt is a
    brief from [dimension-briefs.md](dimension-briefs.md), filled with the worktree path, the changed areas and that
-   dimension's open `AUD-*` findings. `quality-auditor` or a general read-only agent both work. The protocol
+   dimension's open `AUD-*` findings. `quality-auditor` or a general read-only agent both work. They report; only you write to the ledger. The protocol
    dimension runs the conformance checks of [INTEGRATION.md](../../INTEGRATION.md) §6 (the list
    `/swarm:adopt --check` runs) by hand, read-only.
 
@@ -78,12 +78,19 @@ every gate green). Reports kept outside the repo left nothing to compare against
      If the rule is marked `(preference)`, propose the mechanism that would enforce it (a ratchet, a test, a hook);
      if it is marked `enforced:`, the mechanism has a hole: that is a finding of its own.
 
-5. **Report.** Write the findings with their detection data to `openspec/audits/<date>.findings.json` (an array of
-   `{ id, severity, introduced, detected, catchable_at_review, rule? }`), then run
+5. **Ledger, then report.** The audit's output is ledger lines, not a prose list. For every finding that survived
+   step 4 and is not already in the ledger, run one `{findings} add --severity <high|medium|low> --title "<what>"
+   --file <path> [--line N] --source audit --owner <who> --dc <DC-xxx> --introduced <sha|unknown>
+   [--catchable-at-review]` (a carried-over finding keeps its id and its `--opened`/`--detected` dates; the SLA
+   clock starts at `opened`). Ask the human for owners; a HIGH without one fails conformance L2.8. Resolved findings
+   are closed with `{findings} close <id> --by <sha>`; a risk the human accepts with `{findings} accept <id> --reason
+   "<why>"`. Then write the detection data to `openspec/audits/<date>.findings.json` (an array of
+   `{ id, severity, introduced, detected, catchable_at_review, rule? }`), and run
    `{audit} --write --findings openspec/audits/<date>.findings.json`: it stores
    `openspec/audits/<date>.metrics.json` with the median detection latency, the escape rate, the count of
    `preference` rules and the rules found eroding. Write `openspec/audits/<YYYY-MM-DD>.md` from
-   [skeleton.md](skeleton.md). Commit the three files with `{commit} "audit: report <date>"` and integrate with
+   [skeleton.md](skeleton.md), starting with its **Cierre** section (the closure numbers from `{findings} stats` and
+   the metrics table: open, overdue, median age, opened/closed 14 days, ratio, hot files). Commit the three files and the ledger with `{commit} "audit: report <date>"` and integrate with
    `{land}`.
 
 ## Severity
@@ -110,7 +117,7 @@ the scenario holds) or **suspected** (plausible, not proven).
 
 ## Output in chat
 
-Six lines: commit and mode; counts by severity (new / open / resolved); the top two findings; metric deltas that
+Seven lines: closure first (`{findings} stats`: open, overdue, median age, ratio); commit and mode; counts by severity (new / open / resolved); the top two findings; metric deltas that
 rose; median detection latency and escape rate with their trend; an offer to open a change for the first block of
 the proposed order. Nothing is fixed unless the human asks.
 

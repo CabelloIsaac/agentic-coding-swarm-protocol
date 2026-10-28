@@ -42,6 +42,14 @@ pins down.
 6. **Defect classes.** Load the catalog (the path in your brief, else `checklists/defect-classes.md` in the project, else the copy in the swarm plugin (Glob `**/checklists/defect-classes.md`)) and check the diff against `DC-TEST-01` to `DC-TEST-03`; for logic
    that touches money, retries or concurrency, add one mutant per matching `DC-SPEND-*`/`DC-IDEM-*` class (drop the
    budget check, change the idempotency key per attempt, write the dedupe marker last) and say whether a test kills it.
+   **Required check, concurrency:** every state transition the diff adds or changes (approve, cancel, complete, a
+   new status in a ledger, a reservation) must have a test with two concurrent callers: `await
+   Promise.all([transition(id), transition(id)])`, asserting that exactly one wins (one success, one typed conflict
+   or no-op) and that exactly one event and one external effect exist afterwards. A transition without it is a
+   survivor of the mutant "drop the atomicity" (`DC-CONC-01`; also `DC-CONC-02` for reservations held in memory and
+   `DC-RUN-06` for recovery that lists types). Report it as a survivor, with the test to add.
+   **Assert the field the rule is about:** if the diff computes an outcome field (`evaluation`, `verdict`,
+   `decision`), the test must assert that field, not a neighbouring one such as `status`.
 7. **Prioritize** by what a surviving mutant could cost: money, data loss, deletion, auth and external effects first.
 
 ## Output (≤ 40 lines)

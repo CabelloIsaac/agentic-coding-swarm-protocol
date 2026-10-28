@@ -1,3 +1,13 @@
+<!--
+Work in progress has a limit (`roadmap.maxActive`, default 12) and a change with no task ticked for
+`roadmap.staleDays` (default 14) fails `roadmap`. To keep a change that is deliberately waiting, add this line at the
+top, with the real reason, and delete it when work resumes. It exempts the change from the stale check only: a parked
+change still counts toward the limit; archive it or delete the folder (the roadmap entry stays as `planned`) to stop
+counting it.
+
+parked: <why it waits, and what unblocks it>
+-->
+
 ## Why
 
 <One or two sentences: why now.>

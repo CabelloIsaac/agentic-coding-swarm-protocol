@@ -2,7 +2,7 @@
 name: land
 description: Integrates the current worktree branch into the integration branch with the repo's land command (default pnpm land - rebase, ADR numbering, full verify inside a lock, fast-forward, publish) and handles every failure it can report. Use when the user asks to land, integrate, merge or ship finished work, or when land failed with a conflict, a held lock, foreign commits, a red verify or a failed push.
 disable-model-invocation: true
-argument-hint: "[--squash \"<message>\"] [--no-push]"
+argument-hint: "[--squash \"<message>\"] [--no-push] [--override-findings \"<reason>\"]"
 allowed-tools: Bash(pnpm land) Bash(pnpm land *) Bash(pnpm wt:commit *) Bash(pnpm wt:status *) Bash(pnpm verify *) Bash(git status *) Bash(git log *) Bash(git diff *) Bash(git rebase *) Bash(git add *) Bash(uptime)
 ---
 
@@ -52,6 +52,7 @@ Copy this checklist and tick it:
    | `✓ N commit(s) of <branch> on main` | landed and published | **Report** |
    | `✗ land: another pnpm land is running` | the lock is held by a live land | wait for it and retry; never delete the lock (a dead pid is cleared automatically) |
    | `✗ land: conflict while rebasing onto main` | your branch and main touch the same lines; the rebase was aborted | **Conflict** below |
+   | `✗ land: … open HIGH finding(s) past the SLA` or `… the last N lands closed nothing` | the findings gates: fix or close a finding with a `Closes: <id>` trailer (or a `refactor:` commit) | **findings gates** in [failures.md](failures.md); `--override-findings` only with the human's agreement |
    | `✗ land: origin/main has N commit(s) that main lacks` | two histories: someone published from another clone | stop; report the listed commits to the human; do not pull, merge or rebase onto `origin/main` |
    | `✗ land: verification failed: main was not touched` | red inside the lock | `verify` skill on your branch; under load, rerun the failing files and queue the land |
    | `✗ main integrated locally but NOT published` | the push failed after the fast-forward | read the reason; a `pre-push` rejection means this clone is not the publisher: tell the human. Never force or `--no-verify` |

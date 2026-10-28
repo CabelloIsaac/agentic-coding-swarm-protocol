@@ -54,6 +54,9 @@ update `design.md` or the specs first, then carry on.
 1. **Locate.** `{spec} list --json`, then `{spec} status --change <name> --json`. Name the phase from the table.
 2. **Check the roadmap.** The change must have a roadmap entry (block, wave, priority). If it has none, add it in the
    same commit as the folder; never start a low-priority or frozen change without changing the roadmap first.
+   **Check the WIP limit before proposing:** run `{roadmap}`; if it reports more active changes than
+   `roadmap.maxActive` or stale ones, finish, archive or park something first. A new change opens only after one
+   closes.
 3. **Run the phase** from its detail file. Each phase ends with its exit condition, not with a feeling of being
    done.
 4. **Commit per task group** with `{commit}`; integrate with `{land}` only after the verify phase is clean.

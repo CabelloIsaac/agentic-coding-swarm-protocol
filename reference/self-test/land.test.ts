@@ -233,3 +233,100 @@ describe('land', () => {
     assert.equal(subjects(fx.main, `${BRANCH}~1..${BRANCH}`)[0], 'docs: number ADRs (draft-second.md → 0002-second.md) and regenerate the index');
   });
 });
+
+const LEDGER = 'docs/audits/findings.jsonl';
+const entry = (over: Record<string, unknown>) =>
+  `${JSON.stringify({ id: 'AUD-x', severity: 'medium', title: 't', file: 'f.ts', source: 'audit', opened: '2026-01-01', sla_due: '2999-01-01', status: 'open', detected: '2026-01-01', ...over })}\n`;
+
+describe('land: findings gates', () => {
+  test('an overdue HIGH blocks the land unless a commit carries `Closes: <id>`; then the ledger gets the closed line in a commit of its own', (t) => {
+    const fx = fixture(t, { files: { [LEDGER]: entry({ id: 'AUD-late', severity: 'high', owner: 'ana', sla_due: '2026-01-03' }) } });
+    commit(fx.wt, 'feat: unrelated', { 'a.txt': 'a\n' });
+    const before = sha(fx.main, BRANCH);
+    const refused = fx.run('land', [], { env: verifyWith('true') });
+    assert.notEqual(refused.status, 0, refused.out);
+    assert.match(refused.out, /1 open HIGH finding\(s\) past the SLA \(AUD-late, \d+ day\(s\) overdue\)/);
+    assert.match(refused.out, /"Closes: AUD-late"/);
+    assertUntouched(fx, before);
+
+    const closing = commit(fx.wt, 'fix: patch the late one\n\nCloses: AUD-late', { 'b.txt': 'b\n' });
+    const ok = fx.run('land', [], { env: verifyWith('true') });
+    assert.equal(ok.status, 0, ok.out);
+    assert.match(ok.out, /findings closed: AUD-late/);
+    assert.equal(subjects(fx.main, `${BRANCH}~1..${BRANCH}`)[0], 'chore: close findings (AUD-late)');
+    assert.equal(git(fx.main, 'show', '--name-only', '--format=', BRANCH), LEDGER, 'the sealing commit touches only the ledger');
+    assert.equal(sha(fx.main, `${BRANCH}~1`), closing, 'the verified SHA is intact underneath');
+    const lines = git(fx.main, 'show', `${BRANCH}:${LEDGER}`).split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+    assert.deepEqual([lines.length, lines[1]?.status, lines[1]?.closed_by], [2, 'closed', closing]);
+    const landed = fx.landLog().filter((e) => e.result === 'landed').at(-1);
+    assert.deepEqual(landed?.closes, ['AUD-late']);
+    assert.equal(landed?.refactor, false);
+    assert.equal(sha(fx.remote, BRANCH), sha(fx.main, BRANCH));
+  });
+
+  test('every overdue HIGH needs its own Closes; a typo in the id closes nothing', (t) => {
+    const fx = fixture(t, { files: { [LEDGER]: entry({ id: 'AUD-a', severity: 'high', sla_due: '2026-01-03' }) + entry({ id: 'AUD-b', severity: 'high', sla_due: '2026-01-04' }) } });
+    commit(fx.wt, 'fix: one of two\n\nCloses: AUD-a', { 'a.txt': 'a\n' });
+    const r = fx.run('land', [], { env: verifyWith('true') });
+    assert.notEqual(r.status, 0, r.out);
+    assert.match(r.out, /AUD-b/);
+    assert.doesNotMatch(r.out, /AUD-a,/);
+  });
+
+  test('--override-findings lands anyway, logs `findings-overridden` with the reason, and closes nothing; an empty reason is refused', (t) => {
+    const fx = fixture(t, { files: { [LEDGER]: entry({ id: 'AUD-late', severity: 'high', sla_due: '2026-01-03' }) } });
+    commit(fx.wt, 'fix: production is down', { 'a.txt': 'a\n' });
+    const before = sha(fx.main, BRANCH);
+    const empty = fx.run('land', ['--override-findings', ' '], { env: verifyWith('true') });
+    assert.match(empty.out, /--override-findings needs a reason/);
+    assertUntouched(fx, before);
+    const r = fx.run('land', ['--override-findings', 'prod incident, owner on leave'], { env: verifyWith('true') });
+    assert.equal(r.status, 0, r.out);
+    const overridden = fx.landLog().find((e) => e.result === 'findings-overridden');
+    assert.equal(overridden?.reason, 'prod incident, owner on leave');
+    assert.deepEqual(overridden?.gates, ['sla']);
+    assert.equal(git(fx.main, 'show', `${BRANCH}:${LEDGER}`).split('\n').length, 1, 'the finding is still open');
+  });
+
+  test('closure quota: the 4th land after three that closed nothing is refused; a refactor (or a Closes) is accepted', (t) => {
+    const fx = fixture(t, { files: { [LEDGER]: entry({ id: 'AUD-m' }) } });
+    for (const n of [1, 2, 3]) {
+      commit(fx.wt, `feat: change ${n}`, { [`f${n}.txt`]: 'x\n' });
+      assert.equal(fx.run('land', [], { env: verifyWith('true') }).status, 0);
+    }
+    assert.deepEqual(fx.landLog().filter((e) => e.result === 'landed').map((e) => e.closes), [[], [], []]);
+    commit(fx.wt, 'feat: change 4', { 'f4.txt': 'x\n' });
+    const before = sha(fx.main, BRANCH);
+    const refused = fx.run('land', [], { env: verifyWith('true') });
+    assert.notEqual(refused.status, 0, refused.out);
+    assert.match(refused.out, /the last 3 lands closed nothing: this land must close a finding or be a refactor \(`Closes: <id>` trailer\)/);
+    assert.match(refused.out, /--override-findings/);
+    assertUntouched(fx, before);
+
+    commit(fx.wt, 'refactor: split the handler', { 'f5.txt': 'x\n' });
+    const ok = fx.run('land', [], { env: verifyWith('true') });
+    assert.equal(ok.status, 0, ok.out);
+    const landed = fx.landLog().filter((e) => e.result === 'landed').at(-1);
+    assert.equal(landed?.refactor, true);
+    // the refactor reset the count: the next non-closing land is fine again
+    commit(fx.wt, 'feat: change 6', { 'f6.txt': 'x\n' });
+    assert.equal(fx.run('land', [], { env: verifyWith('true') }).status, 0);
+  });
+
+  test('closure quota does not apply without open findings, and counts a Closes trailer as closing', (t) => {
+    const empty = fixture(t, { files: { [LEDGER]: entry({ status: 'closed', closed: '2026-01-02' }) } });
+    for (const n of [1, 2, 3, 4]) {
+      commit(empty.wt, `feat: change ${n}`, { [`f${n}.txt`]: 'x\n' });
+      assert.equal(empty.run('land', [], { env: verifyWith('true') }).status, 0, `land ${n}`);
+    }
+    const fx = fixture(t, { files: { [LEDGER]: entry({ id: 'AUD-m' }) } });
+    for (const n of [1, 2, 3]) {
+      commit(fx.wt, `feat: change ${n}`, { [`f${n}.txt`]: 'x\n' });
+      fx.run('land', [], { env: verifyWith('true') });
+    }
+    commit(fx.wt, 'fix: the medium one\n\nCloses: AUD-m', { 'f4.txt': 'x\n' });
+    const ok = fx.run('land', [], { env: verifyWith('true') });
+    assert.equal(ok.status, 0, ok.out);
+    assert.deepEqual(fx.landLog().filter((e) => e.result === 'landed').at(-1)?.closes, ['AUD-m']);
+  });
+});

@@ -155,6 +155,34 @@ export interface Config {
    */
   ratchets: { file: string; commitMessage: string };
 
+  // >>> 0.4.0 formatter and dependency gate (begin) >>>
+  /**
+   * The formatter in `verify`. `check` runs on the whole repo in the full tier and must exit non-zero when something is
+   * unformatted; `quickCheck` gets the changed files appended (quick tier). Other stacks: `prettier --check .`,
+   * `ruff format --check .`, `test -z "$(gofmt -l .)"`, `cargo fmt --check`.
+   */
+  format: { check: string; quickCheck: string };
+  /** The dependency gate (`deps-audit.ts`): the audit command prints JSON; `failOn` severities block unless allowlisted. */
+  deps: { command: string; failOn: string[]; allowlistFile: string };
+  // <<< 0.4.0 formatter and dependency gate (end) <<<
+
+  // >>> 0.4.0 closure: findings, mutation smoke, WIP limit (begin) >>>
+  /** Findings ledger (`findings.ts`): ledger path, days to close by severity, closure quota, hot-file threshold. */
+  findings?: {
+    file: string;
+    sla: { high: number; medium: number; low: number };
+    closureEvery: number;
+    hotFiles: { fixes: number; days: number };
+  };
+  /** Mutation smoke (`mutation-smoke.ts`): which changed files get mutated, how their tests are found and run. */
+  mutation?: Partial<{
+    include: string; testPattern: string; resolve: 'sibling' | 'sibling+grep'; command: string;
+    timeoutSec: number; mode: 'warn' | 'fail'; max: number; maxTotal: number; maxLines: number;
+  }>;
+  /** WIP limit (`roadmap.ts`): active changes allowed and days without a ticked task before a change is stale. */
+  roadmap?: Partial<{ maxActive: number; staleDays: number }>;
+  // <<< 0.4.0 closure: findings, mutation smoke, WIP limit (end) <<<
+
   /** Sandbox folder for throw-away experiments; nothing in the product may import from it. */
   playgroundDir: string;
 
@@ -191,6 +219,9 @@ const defaults: Config = {
     // channel (onTaskUpdate timeouts).
     full: [
       { name: 'lint', cmd: 'pnpm -s lint' },
+      // >>> 0.4.0 formatter (begin) >>>
+      { name: 'format', cmd: 'pnpm -s biome format .' },
+      // <<< 0.4.0 formatter (end) <<<
       { name: 'typecheck', cmd: 'pnpm -s typecheck' },
       { name: 'tsc app-a', cmd: 'npx tsc --noEmit -p apps/app-a' },
       { name: 'tsc app-b', cmd: 'npx tsc --noEmit -p apps/app-b' },
@@ -203,6 +234,14 @@ const defaults: Config = {
       // After the tests: the coverage ratchet reads the summary they just wrote. A rule without a mechanism erodes
       // (file size, coverage gap and lint budget all drifted with every gate green before this step existed).
       { name: 'ratchets', cmd: 'node scripts/dev/ratchets.ts', serial: true },
+      // >>> 0.4.0 mutation smoke (begin) >>>
+      // Related tests of the changed files must be able to fail; `--mode warn` until the survivors it reports are fixed
+      { name: 'mutation smoke', cmd: 'node scripts/dev/mutation-smoke.ts --mode warn', serial: true },
+      // <<< 0.4.0 mutation smoke (end) <<<
+      // >>> 0.4.0 dependency gate (begin) >>>
+      // Needs the network (the audit database); a known high/critical vulnerability does not wait for a convenient moment
+      { name: 'deps', cmd: 'node scripts/dev/deps-audit.ts', serial: true },
+      // <<< 0.4.0 dependency gate (end) <<<
     ],
     // Import-graph test selection misses tests that read YAML or templates without importing them: the quick tier
     // never closes a task.
@@ -211,6 +250,11 @@ const defaults: Config = {
       { name: 'typecheck', cmd: 'pnpm -s typecheck' },
       // Only the file-size ratchet, only on changed files: coverage and the lint budget need the full run
       { name: 'file size', cmd: 'node scripts/dev/ratchets.ts --size-only', appendChanged: /\.(ts|tsx)$/, first: true },
+      // >>> 0.4.0 silent errors and formatter (begin) >>>
+      // Per file only: the recorded total is judged by the full run
+      { name: 'silent errors', cmd: 'node scripts/dev/ratchets.ts --silent-only', appendChanged: /\.(ts|tsx|js|jsx|mjs|cjs)$/, first: true },
+      { name: 'format', cmd: 'pnpm -s biome format --no-errors-on-unmatched', appendChanged: /\.(ts|tsx|js|jsx|mjs|cjs)$/, first: true },
+      // <<< 0.4.0 silent errors and formatter (end) <<<
       { name: 'structural rules', cmd: 'pnpm -s test:arch', serial: true },
       { name: 'tsc app-a', cmd: 'npx tsc --noEmit -p apps/app-a', whenChanged: /^apps\/app-a\// },
       { name: 'tsc app-b', cmd: 'npx tsc --noEmit -p apps/app-b', whenChanged: /^apps\/app-b\// },
@@ -263,6 +307,17 @@ const defaults: Config = {
   },
 
   ratchets: { file: 'quality-ratchets.json', commitMessage: 'chore: tighten quality ratchets' },
+
+  // >>> 0.4.0 formatter and dependency gate (begin) >>>
+  format: { check: 'pnpm -s biome format .', quickCheck: 'pnpm -s biome format --no-errors-on-unmatched' },
+  deps: { command: 'pnpm audit --prod --json', failOn: ['critical', 'high'], allowlistFile: 'deps-allowlist.json' },
+  // <<< 0.4.0 formatter and dependency gate (end) <<<
+
+  // >>> 0.4.0 closure: findings, mutation smoke, WIP limit (begin) >>>
+  findings: { file: 'docs/audits/findings.jsonl', sla: { high: 2, medium: 14, low: 60 }, closureEvery: 3, hotFiles: { fixes: 3, days: 30 } },
+  mutation: { command: 'pnpm vitest run {files}', mode: 'warn' },
+  roadmap: { maxActive: 12, staleDays: 14 },
+  // <<< 0.4.0 closure: findings, mutation smoke, WIP limit (end) <<<
 
   playgroundDir: 'playground',
 

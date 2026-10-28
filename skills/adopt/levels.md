@@ -10,9 +10,9 @@ Each level writes these files and must pass these checks. ADOPTION.md's checklis
 | Level | Files written in the repo | Checks that must pass |
 | --- | --- | --- |
 | 0 | `swarm.json`; `CLAUDE.md` (level-0 rules only); `.claude/settings.json`; `.claude/.gitignore`; root `.gitignore` entries; `docs/adr/` (template, index, adoption ADR) | L0.1 to L0.6 |
-| 1 | verify entry point and `commands.verify`/`verifyQuick`; CI workflow; `docs/quality.md`; `quality-ratchets.json`; the coverage floor; level-1 rules appended to `CLAUDE.md` | L1.1 to L1.6 |
-| 2 | `land`, `wt`, `adr` and their config; `hooks` and the session commands in `swarm.json`; `review` block in `swarm.json` and the first receipt; architecture test and docs test; `AGENTS.md`; the `pre-push` guard (or branch protection); level-2 rules appended to `CLAUDE.md` | L2.1 to L2.7 |
-| 3 | OpenSpec and roadmap; `commands.audit` and a baseline audit; scheduled reviews | L3.1 to L3.5 |
+| 1 | verify entry point and `commands.verify`/`verifyQuick`; CI workflow; `docs/quality.md`; `quality-ratchets.json` (with `silentErrors`); the coverage floor; `deps-allowlist.json` and the dependency audit; the formatter check; level-1 rules appended to `CLAUDE.md` | L1.1 to L1.9 |
+| 2 | `land`, `wt`, `adr` and their config; `hooks` and the session commands in `swarm.json`; `review` block in `swarm.json` and the first receipt; architecture test and docs test; `AGENTS.md`; the `pre-push` guard (or branch protection); the findings ledger and `commands.findings`; `mutation-smoke`; level-2 rules appended to `CLAUDE.md` | L2.1 to L2.10 |
+| 3 | OpenSpec and roadmap with the WIP limit; `commands.audit` and a baseline audit; scheduled reviews | L3.1 to L3.6 |
 | Transferability | fresh-clone workflow, `CODEOWNERS`, runbook, dependencies, reference task, new-agent workflow, handover checklist | X1 to X5 (`--check transfer`) |
 
 The protocol version: plugin agents read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`; agents without the
@@ -85,8 +85,18 @@ for `.claude/settings.json` (or `python3 -m json.tool`); `--check 0`.
      diagnostic as an error.
    - **Porting.** `--init` and the lint counter are Node-shaped. A Python pilot ported the ratchets in about 190 lines
      and verify in about 110; keep the file format identical so the ports stay interchangeable (manual chapter 07).
-6. `docs/quality.md` from `${CLAUDE_SKILL_DIR}/../../templates/docs/quality.md`.
-7. Append the `<!-- level 1 -->` rules of `CLAUDE.md`, keeping only those whose mechanism now exists.
+6. **Dependency gate** (L1.7). `${CLAUDE_SKILL_DIR}/../../templates/deps-allowlist.json` to the root and
+   `${CLAUDE_SKILL_DIR}/../../reference/scripts/deps-audit.ts` to `scripts/dev/` with `deps.command` set to the
+   stack's audit (`pnpm audit --prod --json`, `pip-audit -f json`, `cargo audit --json`). Run it once: every high or
+   critical advisory it prints gets an upgrade today or an allowlist entry with reason, owner and a short expiry.
+   Add `deps` as the last serial step of the full `verify` and to CI.
+7. **Formatter** (L1.8). If the formatter is off, turn it on in one logic-free commit at a quiet moment (manual
+   chapter 07: `git diff -w --stat` empty, `.git-blame-ignore-revs` with that SHA, every open branch rebases once).
+   Add the `format` step to both verify tiers (`format.check`, `format.quickCheck`).
+8. **Silent errors** (L1.9). `ratchets.ts --init` records today's silent catches in `silentErrors`; add
+   `ratchets.ts --silent-only` on the changed files to the quick tier. The count only goes down from here.
+9. `docs/quality.md` from `${CLAUDE_SKILL_DIR}/../../templates/docs/quality.md`.
+10. Append the `<!-- level 1 -->` rules of `CLAUDE.md`, keeping only those whose mechanism now exists.
 
 Evidence: both gates green with their last lines pasted; `--check 1`. L1.6 at this level: the file exists, `verify`
 runs it, and nothing is loosened compared with the integration branch.
@@ -122,7 +132,15 @@ Then, in every scenario:
    there is no local `land` check: a required review by `CODEOWNERS` in which the reviewer attaches the `reviewer`
    agent's report counts as the receipt.
 6. `land` tightens the ratchets (level 1 step 5) and commits only that file.
-7. Append the `<!-- level 2 -->` rules of `CLAUDE.md`. In PR mode there is no `pre-push` hook: change the rule that
+7. **Findings ledger and closure gate** (L2.8, L2.9). `${CLAUDE_SKILL_DIR}/../../reference/scripts/findings.ts` to
+   `scripts/dev/`, `commands.findings` and the `findings` block in `swarm.json` (template SLA 2 / 14 / 60 days,
+   `closureEvery: 3`). Seed the ledger from the latest audit with `findings add` (one line per open finding, an
+   `--owner` on every HIGH, `--opened` the audit's date so the SLA clock is honest), then show the user `findings
+   check`: an overdue HIGH blocks `land` from now on unless the change carries `Closes: <id>`.
+8. **Mutation smoke** (L2.10). `${CLAUDE_SKILL_DIR}/../../reference/scripts/mutation-smoke.ts` to `scripts/dev/`
+   with `mutation.command` set to the test runner; `--mode warn` as a serial step of the full tier after the tests,
+   `--mode fail` once the survivors it reports are fixed.
+9. Append the `<!-- level 2 -->` rules of `CLAUDE.md`. In PR mode there is no `pre-push` hook: change the rule that
    cites it to name the branch protection as a `(preference)`, since a setting cannot be cited as a path.
 
 Evidence: a trivial `docs/` change landed (or its PR opened) with the output shown; `--check 2`.
@@ -140,6 +158,10 @@ Only after levels 0–2 have run for about two weeks.
    `${CLAUDE_SKILL_DIR}/../../templates/github/workflows/weekly-review.yml`). **Ask first**: they spend money and
    send code to a model, so the user decides on budget and data policy. Use a dedicated API key with a spend cap
    (manual chapter 15).
+4. **WIP limit** (L3.6). The `roadmap` block in `swarm.json` (template `maxActive: 12`, `staleDays: 14`); the
+   roadmap validator fails above the limit and on stale changes. If the project is already above it, the first
+   task is a triage with the user: archive, park (`parked: <reason>` in the proposal) or finish; never raise the
+   limit to fit.
 
 Evidence: `--check 3`.
 

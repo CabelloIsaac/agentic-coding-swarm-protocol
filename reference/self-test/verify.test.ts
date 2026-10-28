@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import { config } from '../scripts/dev-flow.config.ts';
 import { onlyRpcTimeouts, quickSteps } from '../scripts/verify.ts';
 import { fixture } from './helpers.ts';
 
@@ -118,5 +119,31 @@ describe('verify', () => {
     assert.equal(r.status, 0, r.out);
     assert.match(r.stdout, /^verify --quick: affected$/m);
     assert.equal(readFileSync(join(fx.wt, 'tmp/verify/affected.log'), 'utf8'), 'changed since main\n');
+  });
+
+  test('0.4.0 defaults: format in both tiers, silent errors in the quick tier, deps last in the full tier', () => {
+    const full = config.verify.full;
+    assert.ok(full.some((s) => s.name === 'format' && s.cmd === config.format.check), 'full tier has the format step');
+    assert.deepEqual(
+      full.slice(-3).map((s) => [s.name, s.serial]),
+      [['ratchets', true], ['mutation smoke', true], ['deps', true]],
+      'after the tests: ratchets, then the mutation smoke, then deps last, all serial',
+    );
+    assert.match(full.find((s) => s.name === 'mutation smoke')?.cmd ?? '', /mutation-smoke\.ts --mode warn$/);
+    assert.match(full.find((s) => s.name === 'deps')?.cmd ?? '', /deps-audit\.ts$/);
+    const quick = quickSteps(['src/a.ts', 'README.md']);
+    const format = quick.find((s) => s.name === 'format');
+    assert.equal(format?.cmd, `${config.format.quickCheck} 'src/a.ts'`, 'quick format gets only the changed source files');
+    assert.match(quick.find((s) => s.name === 'silent errors')?.cmd ?? '', /ratchets\.ts --silent-only 'src\/a\.ts'$/);
+    assert.ok(!quick.some((s) => s.name === 'deps'), 'the audit needs the network: not in the quick tier');
+    assert.deepEqual(quickSteps(['README.md']).filter((s) => ['format', 'silent errors'].includes(s.name)), [], 'no source changed: neither step');
+  });
+
+  test('a failing format step turns verify red like any other step', (t) => {
+    const fx = fixture(t, { config: { verify: { full: [{ name: 'format', cmd: 'echo "Formatter would have printed the following content"; exit 1' }, { name: 'lint', cmd: 'true' }] } } });
+    const r = fx.run('verify');
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.stdout, /✗ format/);
+    assert.match(r.stdout, /Formatter would have printed/);
   });
 });

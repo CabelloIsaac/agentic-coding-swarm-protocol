@@ -78,8 +78,32 @@ changes:
 - `frozen: true` parks a change; `absorbed_by` closes it inside another.
 - `pnpm roadmap` sorts (unfrozen first, non-P2 first, then wave, priority, file order) and **fails** on: duplicate
   ids, invalid priority, P0/P1 without a wave, unknown wave, frozen P0, a dependency that does not exist or sits in
-  a later wave, a nonexistent `absorbed_by`, an active change without an entry.
+  a later wave, a nonexistent `absorbed_by`, an active change without an entry, and the work-in-progress limit
+  (next section).
 - YAML comments record provenance ("moved up by the tech lead on <date>, baseline: …").
+
+## Work in progress has a limit
+
+The reference project let changes pile up: **75 active changes, 19 of them never started** (a folder, a proposal, not
+one task ticked), with a roadmap that listed them all as in flight. Nothing was wrong with any single change. The
+system had no cost for opening one and no pressure to close one, so only opening happened, and the active list stopped
+meaning "what we are working on". Every status report, every audit and every agent that reads the list pays for the
+noise, and the real work hides in it.
+
+A limit turns that around: when the list is full, the only way to open something is to close something. `roadmap.ts`
+checks two things, and both fail `pnpm roadmap` (so verify):
+
+- **More active changes than `roadmap.maxActive`** (default 12). The message lists the oldest ones by days since the
+  last progress.
+- **A stale change**: no task ticked (`- [x]`) for `roadmap.staleDays` days (default 14), measured from the last
+  commit that added a tick to its `tasks.md` (a change never started is as old as its folder). Rewording a task does
+  not reset the clock.
+
+Three ways out, and the message names them: **finish** it, **archive** it, or **park** it. Parking is one line at the
+top of the proposal, `parked: <reason>`: it exempts the change from the stale check and nothing else. A parked change
+still counts toward the limit, on purpose; otherwise parking becomes the place changes go to be forgotten. Work that is
+not started yet belongs in the roadmap as `planned` (an entry without a folder), not as a folder that will "get
+started next week". Check the limit **before** proposing; `skills/change` does.
 
 ## OpenSpec configuration rules (`openspec/config.yaml`)
 

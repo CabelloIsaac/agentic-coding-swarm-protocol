@@ -10,6 +10,7 @@ appended to `<git-common-dir>/<project>-land-log.jsonl`. Messages name the pnpm 
 - Guards (before the lock)
 - Lock and remote
 - Inside the loop
+- Findings gates
 - Publish and cleanup
 
 ## Guards (before the lock)
@@ -47,6 +48,21 @@ branch touched. Read the test; do not just rerun.
 
 Two ADRs with the same number after a rebase (one numbered on a branch, one on `main`): drop the numbering commit
 from your branch and let `land` renumber the draft.
+
+## Findings gates
+
+Both run after the rebase and the review gate and before verify, read the ledger from `main`, and leave `main`
+untouched. Contract: [chapter 03](../../manual/03-integration-land.md), "Findings gates".
+
+| Message | Cause | Action |
+| --- | --- | --- |
+| `N open HIGH finding(s) past the SLA (AUD-x, 3 day(s) overdue): this land must carry "Closes: AUD-x" in a commit message` | an open HIGH finding is past its `sla_due` and no commit of this branch claims it | fix it now, in this branch or a quick one of its own, and put `Closes: AUD-x` (one per overdue HIGH) in the commit message, then land again. If it truly cannot be fixed, the human decides `findings accept AUD-x --reason "<why>"` in a reviewed change. Never edit the ledger to move the date: land reads it from `main` |
+| `the last 3 lands closed nothing: this land must close a finding or be a refactor (`Closes: <id>` trailer)` | none of the last `closureEvery` lands closed a finding or was a refactor, and this one does not either | pick the oldest open finding (`findings list --open`) that fits this branch and close it, or add a real `refactor:` commit; a `Closes:` with an id that is not an open finding counts for nothing |
+| `--override-findings needs a reason` | empty reason | give a reason, or fix the finding instead |
+| `<ledger>:N: …` + `main was not touched` | the ledger on `main` has a malformed line | fix it through a normal change (append-only: do not delete lines); `findings check` locates it |
+
+`--override-findings "<reason>"` lands past both gates and writes `findings-overridden` to the land log. It is for
+incidents, needs the human's agreement, and every use shows in the next audit.
 
 ## Publish and cleanup
 

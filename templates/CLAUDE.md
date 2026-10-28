@@ -52,6 +52,13 @@ Rules are grouped by the level whose adoption step creates their mechanism. At l
 - Never print or commit secrets. (enforced: .claude/settings.json, .github/workflows/ci.yml)
 - Debt only goes down: no new file over 500 lines, no oversized file grows, the coverage floor follows what is
   measured, the lint warning budget never rises. (enforced: scripts/dev/ratchets.ts, quality-ratchets.json)
+- Errors are never swallowed silently: a `catch` logs with context, rethrows a typed error or returns a Result; no
+  empty `catch {}` and no `.catch(() => undefined)`. Existing ones are recorded and only decrease.
+  (enforced: scripts/dev/ratchets.ts, test/architecture.test.ts)
+- No high or critical vulnerability in the dependencies without an entry in `deps-allowlist.json` with a reason, an
+  owner and an expiry date; an expired entry fails again. (enforced: scripts/dev/deps-audit.ts)
+- The formatter runs in verify: unformatted code does not integrate, and nobody formats by hand in a feature change.
+  (enforced: scripts/dev/verify.ts)
 - Strict TypeScript, ESM, Zod for every contract. No `any` or `@ts-ignore`. (enforced: tsconfig.json, biome.json)
 - Suppressions carry a reason: `// biome-ignore lint/<group>/<rule>: <reason>`. (enforced: biome.json)
 - Files over ~500 lines are split by responsibility, not by line count. (enforced: scripts/dev/ratchets.ts, quality-ratchets.json)

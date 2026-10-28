@@ -1,0 +1,10 @@
+{
+  "//": "Dependency allowlist (manual chapter 10). `scripts/dev/deps-audit.ts` fails on a high or critical advisory unless it is listed here with a reason, an owner and an expiry date; an expired entry fails again. Keys are an advisory id (GHSA-…, CVE-…) or `package@range` exactly as the audit prints it (`package@*` for any range). Keep expiries short (30 days; 90 at most) and owners personal. Keys starting with `_` are ignored. Delete `_example` when you add the first real entry. This file is a review-gate path.",
+  "_example": {
+    "GHSA-xxxx-xxxx-xxxx": {
+      "reason": "No fixed version released; the vulnerable parser is not reachable (we never pass it user input). Upgrade tracked in change <name>.",
+      "expires": "2026-12-01",
+      "owner": "<person>"
+    }
+  }
+}

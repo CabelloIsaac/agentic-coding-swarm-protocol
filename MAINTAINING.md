@@ -123,9 +123,9 @@ another team after release (target: never).
 Every project already produces the inputs: its audit report (manual [chapter 09](manual/09-periodic-audit.md)) with
 the "Protocol vs project" section, and `/swarm:adopt --check` output. The owner collects them monthly in one table:
 
-| Team · project | Protocol version | Level | Protocol score | X-checks | Detection latency (median days) | Lands without conflict | Integration-branch CI failures |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `<team · repo>` | `0.3.0` | 2 | 21/21 | 4/5 | 3 | 96 % | 0 |
+| Team · project | Protocol version | Level | Protocol score | X-checks | Detection latency (median days) | Closure (open · overdue · median age · closed/opened) | Lands without conflict | Integration-branch CI failures |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `<team · repo>` | `0.4.0` | 2 | 26/26 | 4/5 | 3 | 12 · 0 · 9 d · 1.4 | 96 % | 0 |
 
 - **Protocol score:** passed checks over applicable checks for levels 0 to the project's level, from the audit's
   protocol section (`level 0 → 5/5 · level 1 → 5/5 …`), plus X1–X5 as a separate column.
@@ -133,6 +133,10 @@ the "Protocol vs project" section, and `/swarm:adopt --check` output. The owner 
   (`git log -S` or the blamed commit named in the finding) and the gate, review or audit that first reported it.
   Report the median per project. Falling latency means the gates are moving detection earlier; rising latency means
   findings are being caught by audits that a gate should catch, which is a `learn` candidate.
+- **Closure:** the four numbers of the `closure:` headline of `--check` (or `findings stats`): open findings, how
+  many are past their SLA, the median age of the open ones and closed over opened in the last 14 days. Detection
+  latency says how fast problems are seen; closure says whether they go away. A team with low latency and a
+  closure ratio under 1 is accumulating a list, which is what the reference project did for two weeks before 0.4.0.
 - Compare teams to find what to spread, not to rank people: a team with low latency has a mechanism others lack.
   Trends per team matter more than absolute values.
 

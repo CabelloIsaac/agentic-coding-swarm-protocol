@@ -16,12 +16,13 @@ green.
 | **Every non-trivial change** | independent review | `reviewer` subagent or `/code-review` | correctness, regressions, missing tests, repo rules | findings with a failure scenario |
 | **Every change on a sensitive path** | security review | `/security-review` or `security-reviewer` agent | auth, secrets, injection, SSRF, personal data, external effects | findings with severity |
 | **Every land on a covered path** | review gate | `land` | a passing review receipt for this exact change (`review.mode`) | abort, or `review-bypassed` in the land log |
+| **Every land** | SLA check | `land` + `findings` | no open HIGH finding past its SLA unless this land closes it (`Closes: <id>`); a quiet streak of lands must be broken by a closing or refactor land | abort, or `findings-overridden` in the land log |
 | **Every land** | full gate | `land` + `verify` | everything CI runs, serialized, on the current base | JSONL record of the attempt |
 | **Every T3 land** (designed) | human OK | tech lead | data, auth, spend, infra, the gates themselves, weakened tests | approval bound to file hashes |
 | **Daily** | integration-branch and error health | scheduled `daily-health` agent | CI on `main`, new production errors, untriaged team feedback, failed lands | short report + proposed tasks |
 | **Weekly** | quality sweep of the week's diff | scheduled `weekly-quality` agent | everything landed in 7 days: likely bugs, weak tests, duplication, complexity | `openspec/audits/<date>-weekly.md` |
 | **Weekly** | dependencies and security | scheduled agent or CI | `pnpm audit --prod`, versions with CVEs, secrets in tracked files | section in the weekly report |
-| **Biweekly** | global five-dimension audit | `audit-repo` skill | structure, harness, docs and process, scalability, security, with metrics and trend | `openspec/audits/<date>.md` + `.metrics.json` |
+| **Biweekly** | global five-dimension audit | `audit-repo` skill | structure, harness, docs and process, scalability, security, with metrics and trend; closure first | findings appended to `docs/audits/findings.jsonl` + `openspec/audits/<date>.md` + `.metrics.json` |
 | **End of wave** | audit + roadmap review | human + skill | all of the above + nearly-done changes left unarchived, P2 work that slipped in, rollback criteria | report + updated roadmap |
 | **Monthly** | review of the workflow itself | human | land metrics, interventions, cost per change, hooks and skills that add nothing | playbook adjustments (with an ADR if it is a decision) |
 | **Quarterly** | ADR and invariant review | `architect` + human | ADRs no longer honored or that should be superseded; invariants without a test; exception lists | new ADRs / changes |

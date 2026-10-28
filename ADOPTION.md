@@ -56,6 +56,14 @@ The authoritative list of what each level writes and which checks it must pass i
 - [ ] ADRs as drafts numbered on integration (`reference/scripts/adr.ts`) and a generated index.
 - [ ] Review gate: the `review` block in `swarm.json` with the project's core paths added to `sensitive` (or
       `mode: always` for a library), and a first receipt from the `review` skill; `land` tightens the ratchets.
+- [ ] Findings ledger and closure gate: `reference/scripts/findings.ts` as `scripts/dev/findings.ts`,
+      `commands.findings` and the `findings` block in `swarm.json` (SLA 2 / 14 / 60 days, `closureEvery` 3), and the
+      findings gates of `land` (SLA and closure quota). Seed `docs/audits/findings.jsonl` from the last audit: one
+      `findings add` per open finding, keeping its real `--opened` date (the example in
+      `templates/docs/audits/findings.jsonl` shows the format; do not keep its lines), then **set an owner on every
+      open HIGH** (`findings assign <id> --owner <name>`): conformance L2.8 fails without it. From then on land refuses an
+      overdue HIGH and a streak of lands that close nothing; `Closes: <id>` in a commit message is how work closes
+      a finding. Expect the first lands to be refused: that is the point.
 - [ ] The level-2 group of `CLAUDE.md` rules, and `AGENTS.md`.
 - [ ] An invariants table (start with 5) and its architecture test (`templates/tests/architecture.test.ts`).
 - [ ] A documentation test (`templates/tests/docs.test.ts`): links, paths, new undocumented structure, and the

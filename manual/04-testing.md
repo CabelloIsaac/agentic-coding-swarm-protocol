@@ -109,6 +109,31 @@ Ignoring code blocks, for `docs/**/*.md`, `CLAUDE.md`, `README.md` and the index
 Result: documentation cannot fall behind without the suite saying so. One-directional checks only catch half of the
 drift: a table row whose test was deleted looks exactly like a protected invariant.
 
+## Tests that prove behaviour
+
+A test proves behaviour only if breaking the behaviour turns it red. Three incidents from the reference project:
+
+- **The wrong field.** A capability computed `pending_review` and still returned `evaluation: pass`. Its test checked
+  `status` and not `evaluation`, so the bug shipped with a green suite and full line coverage. In a sample of eight
+  tests, six would have survived a broken implementation; the two that would not were the dangerous ones. **Rule: a
+  test must assert the field the rule is about.** If the requirement says "completed means verified", the assertion
+  is on the verification field, not on whichever field was handy.
+- **The cheap check: the mutation smoke.** `reference/scripts/mutation-smoke.ts` takes the source files a change
+  touched, applies up to four mutations to each (flip a `true`, `>=` to `>`, `&&` to `||`, a return value to
+  `undefined`), runs only their related tests, and reports the mutations that survived (`line 85: flipped true →
+  false survived`). A file whose mutations all survive, or that has no related test, is "not proven". It is a smoke,
+  not mutation testing (Stryker and mutmut below do that properly); it costs a few test runs per changed file, so
+  verify's full tier can afford it. Start in `warn` mode, move to `fail` once the survivors it finds are fixed.
+- **No concurrent callers.** 517 test files and not one called a transition twice at once, so a read-check-append race
+  on an approval (two approvals of the same id) was invisible. **Pattern for every state transition:**
+  `const results = await Promise.all([approve(id), approve(id)])`, then assert exactly one succeeded, the other got
+  the typed conflict (or the documented no-op), and the ledger holds exactly one event and the effect ran once. It is
+  red on a read-check-write implementation and green on a conditional write (chapter 17, section 16). Reservations
+  held in memory need the same test with two workers (two store handles) racing for the last unit.
+
+Add the reasoning to review: the `test-auditor` agent lists the survivors and requires the two-callers test for every
+transition the diff adds.
+
 ## Test quality, not just quantity
 
 Coverage tells you which lines ran, not whether anything useful was asserted. Agent-generated tests tend to cover a

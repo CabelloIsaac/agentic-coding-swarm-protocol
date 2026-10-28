@@ -23,6 +23,9 @@ serially, always green, always fast-forward. Nobody merges by hand or resolves c
      `review.sensitive`), require a passing review receipt for its patch id, or abort with "run /swarm:review (no
      receipt for this change)". Before verify, so a missing review costs seconds, not a whole verify. See "Review
      gate" below.
+   - **Findings gates.** Right after the review gate, also before verify: an overdue HIGH finding blocks the land
+     unless the branch closes it, and a streak of lands that closed nothing blocks the next one that does not. See
+     "Findings gates" below.
    - **Number draft ADRs** (`draft-<slug>` → `00NN-<slug>`), rewriting references across the repo, and regenerate
      the index; commit the result.
    - **Record the SHA** about to be verified (`verified = rev-parse HEAD`), then run the **full verification**
@@ -30,6 +33,8 @@ serially, always green, always fast-forward. Nobody merges by hand or resolves c
    - **Check nothing moved:** `HEAD` must still be `verified` and the tree clean. Otherwise abort: the tip is no
      longer what was verified.
    - If main moved during verification, go back to the start of the loop.
+   - **Seal.** On top of the verified SHA, one commit with the tightened ratchets and/or the `closed` lines of the
+     findings the landed commits claim with `Closes: <id>`. It may touch only those files.
    - **Advance to the verified SHA:** in the worktree that has main checked out (the main checkout), restore
      framework-generated files and run `merge --ff-only <verified>`. The ref and the working tree move together. If
      no worktree has main, use `update-ref refs/heads/main <verified> <old>` (an old-value check).
@@ -53,6 +58,8 @@ Final message: `✓ N commit(s) from <branch> on main (<sha>, published to origi
 | Number ADRs at integration | number collisions between branches (one forced renaming 10 files) |
 | Full verification inside the lock | integrating red; two branches green separately but red together |
 | Re-verify if main moved | a verification that was valid for a base that no longer exists |
+| Overdue-HIGH gate (SLA) | a critical one-line fix sitting unapplied while other work lands on top of it |
+| Closure quota | audits that find ten problems and a branch history that closes none (about 20 of 32 findings stayed open ten days, 2 refactor commits in 769) |
 | Review receipt keyed by patch id | a sensitive change landing with no review, or with a review of an earlier version |
 | Fast-forward to the verified SHA, not the branch name | a commit created while verify ran (a Stop-hook `wip:`) landing unverified |
 | Stop hook idle while its branch lands | that same commit being created in the first place |
@@ -105,6 +112,32 @@ is that skipping review becomes a deliberate, logged act instead of a silent def
 the exact change it saw. The receipt is written by a plain shell sequence (it uses command substitution), so an
 agent whose shell tool is restricted to simple commands must run it through a script file instead. For a team that integrates through pull requests, the same rule is a required review on
 protected paths (`CODEOWNERS`) plus branch protection.
+
+## Findings gates
+
+The reference project's bottleneck was not detecting problems but closing them: about 20 of 32 audit findings stayed
+open for ten days, a one-line critical CVE fix waited, two commits out of 769 were refactors. Two gates in `land`
+make closing the path of least resistance. Both read the ledger (`docs/audits/findings.jsonl`, chapter 09) **from the
+integration branch**, so a branch cannot move its own deadlines, and both run before verify, where a refusal costs
+seconds. Neither does anything in a repository without a ledger.
+
+- **SLA gate.** An open HIGH past its `sla_due` (2 days by default) blocks every land that does not close it. Message:
+  `findings: N open HIGH finding(s) past the SLA (AUD-x, 3 day(s) overdue): this land must carry "Closes: AUD-x" in a
+  commit message`. Fix: land the fix with a `Closes: AUD-x` trailer in its commit message (one trailer per overdue
+  HIGH), or, if it genuinely cannot be fixed now, `findings accept AUD-x --reason "<why>"` in a separate, reviewed
+  change.
+- **Closure quota.** If none of the last `closureEvery` (3) lands of **any** branch closed a finding or was a
+  refactor, the next one must. Message: `the last 3 lands closed nothing: this land must close a finding or be a
+  refactor (`Closes: <id>` trailer)`. A land counts as closing with a `Closes: <id>` trailer naming an open finding
+  (a typo counts for nothing), a `fix(AUD-x):` subject, or a commit whose subject starts `refactor:`. It applies only
+  while the ledger has open findings, and only to log entries written by a land that records `closes` (older entries
+  are ignored, so adopting it does not refuse your next land).
+- **Override.** `land --override-findings "<reason>"` skips both (an empty reason is refused). The land log gets a
+  `findings-overridden` entry with the reason and the gates skipped; the audit counts them. Use it for an incident,
+  not for convenience: a rising count is the signal that the SLAs or the quota are wrong.
+- **After a green verify**, every `Closes: <id>` of the landed commits appends a `closed` line with `closed_by` = that
+  commit, in a commit on top of the verified SHA that touches only the ledger (together with the ratchets file, when
+  both changed, as `chore: tighten ratchets, close findings`). The verified-SHA guarantees above are unchanged.
 
 ## Conflicts
 

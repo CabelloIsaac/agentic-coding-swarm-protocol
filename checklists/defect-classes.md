@@ -28,6 +28,7 @@ the names to your stack.
 | [DC-RUN-03](#dc-run-03) | Long job whose intermediate state nothing recovers | harness | diff |
 | [DC-RUN-04](#dc-run-04) | Reaper that fails work instead of retrying or reconciling | harness | repo |
 | [DC-RUN-05](#dc-run-05) | Child process or job without a timeout | harness | diff |
+| [DC-RUN-06](#dc-run-06) | Recovery that enumerates job types instead of closing by run | harness | diff |
 | [DC-VER-01](#dc-ver-01) | "Pass" without an evaluation | harness | diff |
 | [DC-VER-02](#dc-ver-02) | Error swallowed into a canned success | harness | diff |
 | [DC-SPEND-01](#dc-spend-01) | Spend outside a run or without a budget check | harness | diff |
@@ -36,6 +37,8 @@ the names to your stack.
 | [DC-IDEM-01](#dc-idem-01) | Idempotency key that changes on retry | harness | diff |
 | [DC-IDEM-02](#dc-idem-02) | Dedupe record written after the work | harness | diff |
 | [DC-IDEM-03](#dc-idem-03) | Read-modify-write without a cross-process lock | harness | diff |
+| [DC-CONC-01](#dc-conc-01) | Read-check-write without atomicity on a state transition | harness | diff |
+| [DC-CONC-02](#dc-conc-02) | Reservation or counter held in process memory across workers | harness | diff |
 | [DC-SCALE-01](#dc-scale-01) | Binaries stored in a JSON or key-value store | scalability | diff |
 | [DC-SCALE-02](#dc-scale-02) | O(n) history read on a hot path | scalability | diff |
 | [DC-SCALE-03](#dc-scale-03) | In-process state that breaks with two instances | scalability | diff |
@@ -177,6 +180,17 @@ the names to your stack.
 - **Detect:** for each paid step in a retryable job, ask: on attempt two, is the stored result reused?
 - **Fix:** persist each paid output with a stable key and check it before paying; count attempts against a budget.
 
+### DC-RUN-06
+**Recovery that enumerates job types instead of closing by run** · harness · diff · Seen 1
+- **Symptom:** a sweep, reaper or shutdown hook that loops over a hard-coded list of job or entity types
+  (`for (const kind of ['render', 'publish', 'import'])`) to close what a dead worker left `running`.
+- **Hurts:** a type added later is not in the list; its jobs stay `running` forever, hold their slot and quota, and
+  nobody is told. The list drifts silently with every new feature.
+- **Detect:** grep the recovery code for string-literal type lists or a `switch` over job types; for each new job
+  type in the diff ask whether the sweep would see it without being edited.
+- **Fix:** select by run: every job whose run is `running` with a stale heartbeat, whatever its type, and close the
+  run. Add a test that registers a type the sweep has never heard of and expects it closed.
+
 ## Idempotency and concurrency
 
 ### DC-IDEM-01
@@ -209,6 +223,34 @@ the names to your stack.
   lock they take; the race lives exactly where nobody looks.
 - **Fix:** the store's atomic update (advisory lock, `UPDATE … WHERE version = $n`, unique index), or the resource
   lock the rest of the code uses, taken **inside** the mutating function so no caller can forget it.
+
+### DC-CONC-01
+**Read-check-write without atomicity on a state transition** · harness · diff · Seen 2
+- **Symptom:** `approve`, `cancel`, `complete` or any transition that reads the current status, checks it
+  (`if (status !== 'awaiting_approval') throw`) and then appends or updates, with no conditional write: no
+  `appendIf(id, expectedStatus)`, no `UPDATE … WHERE status = $expected`, no unique index on the transition, no lock
+  held across the read and the write. On an append-only ledger it looks safe because nothing is overwritten.
+- **Hurts:** two callers (two reviewers, a double click, a retry, two workers) both pass the check and both write:
+  two approvals of one id, an effect that runs twice, an impossible state afterwards. A test that calls the
+  transition once, or twice in sequence, stays green.
+- **Detect:** every new or changed transition function; look for a read of the status followed, across any `await`,
+  by a write. Ask: what if the same call runs again between those two lines? Check for a test with two concurrent
+  callers (`Promise.all([t(id), t(id)])`).
+- **Fix:** a conditional write at the port (`appendIf` / `WHERE status = $expected`; a file ledger takes its lock
+  and re-reads the state inside it); the loser gets a typed conflict and returns the winner's result. Add the
+  two-callers test, red on the old code. Related: `DC-IDEM-03` (generic read-modify-write).
+
+### DC-CONC-02
+**Reservation or counter held in process memory across workers** · harness · diff · Seen 1
+- **Symptom:** a budget reservation, quota, rate limit or slot count kept in a module-level `Map`, a class field or a
+  closure, protected by an in-process mutex, while the app runs more than one worker or restarts.
+- **Hurts:** each worker sees the whole budget free, so spend doubles with two workers; a restart drops every hold
+  at once; a crashed worker's reservation is neither visible nor releasable.
+- **Detect:** grep the diff for `new Map(`, module-level `let`/counters next to words like `reserve`, `quota`,
+  `budget`, `slots`, `limit`. Ask: with two processes, who holds the truth?
+- **Fix:** keep the reservation in the shared store with an owner run and an expiry, and reserve with a guarded
+  write (`INSERT … WHERE spent + $amount <= cap`). Test it with two workers (two store handles) racing for the last
+  unit. Related: `DC-SCALE-03` (in-process state).
 
 ## Scalability
 

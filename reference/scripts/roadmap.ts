@@ -7,13 +7,36 @@
  * Status is never written by hand: planned (does not exist yet), active (in the changes folder), done (archived).
  * `roadmapProblems` is what the test checks: every active change is in the roadmap and every reference exists.
  *
- * This is the one script with a dependency outside node:* — the `yaml` package, which is already present wherever the
- * OpenSpec CLI is installed. If you keep the roadmap as JSON, swap `parse` for `JSON.parse` and drop the import.
+ * Work in progress has a limit. `wipProblems` (part of `roadmapProblems`, so part of verify) fails when more changes
+ * are active than `roadmap.maxActive`, and when a change has gone `roadmap.staleDays` without a task being ticked.
+ * The reference project reached 75 active changes, 19 of them never started, because nothing said "enough": opening
+ * is cheap, closing is work, and without a limit only opening happens. The message names the way out: finish, archive
+ * or park. A change is PARKED, and exempt from the stale check only, by a line in its proposal.md:
+ *
+ *     parked: <reason>
+ *
+ * Parking is not an escape from the limit: a parked change still counts as active. To stop counting it, archive it
+ * or delete the folder and leave its roadmap entry as `planned`.
+ *
+ * The one dependency outside node:* is the `yaml` package (already present wherever the OpenSpec CLI is installed),
+ * loaded only when the roadmap file is read, so the WIP check works without it. If you keep the roadmap as JSON, swap
+ * `parse` for `JSON.parse` and drop `createRequire`.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { parse } from 'yaml';
 import { config } from './dev-flow.config.ts';
+
+/** `roadmap` block of dev-flow.config.ts (optional; read through a cast so the config file stays the other agents'). */
+export interface RoadmapConfig {
+  /** Active changes allowed at once. */
+  maxActive: number;
+  /** Days without a task ticked after which a change is stale. */
+  staleDays: number;
+}
+export const ROADMAP_DEFAULTS: RoadmapConfig = { maxActive: 12, staleDays: 14 };
+const wipConfig = (): RoadmapConfig => ({ ...ROADMAP_DEFAULTS, ...(config.roadmap ?? {}) });
 
 export type Priority = 'P0' | 'P1' | 'P2';
 const PRIORITIES: Priority[] = ['P0', 'P1', 'P2'];
@@ -39,6 +62,7 @@ export interface Roadmap {
 export type Status = 'planned' | 'active' | 'done';
 
 export function loadRoadmap(root: string): Roadmap {
+  const { parse } = createRequire(import.meta.url)('yaml') as { parse: (text: string) => unknown };
   return parse(readFileSync(join(root, config.roadmapFile), 'utf8')) as Roadmap;
 }
 
@@ -72,8 +96,56 @@ export function taskProgress(root: string, id: string): { done: number; total: n
   return { done, total: done + open };
 }
 
-export function roadmapProblems(root: string, roadmap = loadRoadmap(root)): string[] {
+const git = (cwd: string, ...args: string[]) => {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  return r.status === 0 ? r.stdout.trim() : '';
+};
+
+/** The reason after `parked:` in the change's proposal, if it has one. */
+export function parkedReason(root: string, id: string): string | undefined {
+  const file = join(root, config.changesDir, id, 'proposal.md');
+  if (!existsSync(file)) return undefined;
+  return /^\s*parked:[ \t]*(\S.*)$/im.exec(readFileSync(file, 'utf8'))?.[1]?.trim();
+}
+
+/**
+ * Unix time of the last commit that added or removed a tick in the change's tasks.md; when it never had one, of the
+ * commit that created the file (a change nobody has started is as old as its folder). `undefined` outside git or
+ * before the first commit: nothing to measure, so nothing is flagged.
+ */
+export function lastProgress(root: string, id: string): number | undefined {
+  const file = `${config.changesDir}/${id}/tasks.md`;
+  const tick = git(root, 'log', '-1', '--format=%ct', '-S[x]', '--', file);
+  const created = git(root, 'log', '--diff-filter=A', '--format=%ct', '--', file).split('\n').filter(Boolean).pop();
+  const at = Number(tick || created);
+  return Number.isFinite(at) && at > 0 ? at : undefined;
+}
+
+/** The work-in-progress limit: too many active changes, and stale ones that are not parked. */
+export function wipProblems(root: string, cfg = wipConfig(), now = Date.now() / 1000): string[] {
+  const dir = join(root, config.changesDir);
+  if (!existsSync(dir)) return [];
   const problems: string[] = [];
+  const active = activeChanges(root).map((id) => ({ id, at: lastProgress(root, id), parked: parkedReason(root, id) }));
+  const ageDays = (at: number | undefined) => (at === undefined ? 0 : Math.floor((now - at) / 86400));
+  if (active.length > cfg.maxActive) {
+    const oldest = [...active].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity)).slice(0, 5);
+    problems.push(
+      `${active.length} active changes, the limit is ${cfg.maxActive} (roadmap.maxActive). Close before opening: finish, archive or park the oldest, ` +
+        `starting with ${oldest.map((c) => `${c.id} (${c.at === undefined ? 'age unknown' : `${ageDays(c.at)} d since progress`})`).join(', ')}. Parked changes still count: archive them or delete the folder and keep the roadmap entry as planned.`,
+    );
+  }
+  for (const c of active) {
+    if (c.parked || c.at === undefined || ageDays(c.at) < cfg.staleDays) continue;
+    problems.push(
+      `${c.id}: stale, no task ticked for ${ageDays(c.at)} days (limit ${cfg.staleDays}, roadmap.staleDays). Finish it, archive it, or add "parked: <reason>" to its proposal.md.`,
+    );
+  }
+  return problems;
+}
+
+export function roadmapProblems(root: string, roadmap = loadRoadmap(root)): string[] {
+  const problems: string[] = wipProblems(root);
   const byId = new Map<string, RoadmapChange>();
   for (const c of roadmap.changes) {
     if (byId.has(c.id)) problems.push(`${c.id}: appears twice`);

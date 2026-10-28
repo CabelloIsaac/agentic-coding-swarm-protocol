@@ -5,6 +5,8 @@ Templates: `templates/openspec/` in the protocol repo (`proposal.md`, `spec.md`,
 
 ## Create or continue
 
+0. **WIP limit first.** `{roadmap}` must pass before a new change is created: no more than `roadmap.maxActive`
+   active changes and none stale. If it fails, close or park something instead of opening another.
 1. Name: kebab-case, verb first (`add-invoice-rounding`, `fix-retry-duplicates`). If a change with that name or the
    same intent is already active, continue it instead of creating another.
 2. `{spec} new change <name>`, then `{spec} status --change <name> --json`: it lists each artifact as `done`,

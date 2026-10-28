@@ -31,6 +31,7 @@ Why: a test you never saw fail may not test anything. Agent-written tests tend t
 | Run one test | `pnpm vitest run <file> -t "<name>"` | `pytest <file>::<test>` | `go test ./<pkg> -run '^<Test>$'` | `cargo test <name>` |
 | Run one file | `pnpm vitest run <file>` | `pytest <file>` | `go test ./<pkg>` | `cargo test --test <file>` (integration) or `cargo test <module>::` |
 | Coverage | `pnpm test:coverage` | `pytest --cov` | `go test -cover ./...` | `cargo llvm-cov` |
+| Two callers (state transitions) | `await Promise.all([t(id), t(id)])`, assert exactly one wins | `with ThreadPoolExecutor(2)`: `pool.map(lambda _: t(id), range(2))` | two goroutines and a `sync.WaitGroup`, run with `-race` | two `std::thread::spawn` on an `Arc`, join both |
 
 The repo's own single-test command (`CLAUDE.md`) wins over this table. The `allowed-tools` line above lists the
 Vitest and `verify` commands; add the one for your stack in the project's settings.
@@ -85,7 +86,9 @@ Vitest and `verify` commands; add the one for your stack in the project's settin
 - Everything the test creates lives in its own temp dir and is deleted.
 - Deterministic: inject the clock, wait on conditions, never `sleep` "to give it time".
 - Timeouts: 20 s per test, 10 s per hook. Needing more means a misclassified e2e or a bug.
-- Assert on behavior, not on a mock you configured to return the expected value.
+- Assert on behavior, not on a mock you configured to return the expected value, and on **the field the rule is
+  about** (`evaluation`, not `status`).
+- A new state transition gets a two-callers test (table above): exactly one wins, one event, one effect.
 - No `.only`, `.skip` or `.todo` reaches the integration branch.
 
 ## Red flags
