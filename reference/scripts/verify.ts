@@ -6,6 +6,10 @@
  *   pnpm verify --quick   development loop: lint, types, structural rules and tests affected relative to the integration branch
  *
  * Full logs are left in `<config.verify.logDir>/<step>.log`. The steps themselves live in dev-flow.config.ts.
+ *
+ * Ratchets (`ratchets.ts`): the full tier runs them as the last serial step, after the tests, because the coverage
+ * ratchet reads the summary the test step writes; serial steps run in their config order. The quick tier checks only
+ * the file-size ratchet, on the changed files. `land` tightens the ratchets file after a green full run.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';

@@ -1,0 +1,32 @@
+# CODEOWNERS · copy to .github/CODEOWNERS and replace the handles.
+# Rules: teams, not individuals (people leave; teams get reassigned on a handover). No path without an owner: the
+# catch-all line comes first, and later lines override it. Turn on "Require review from Code Owners" in branch
+# protection or rulesets, or this file is documentation only.
+# Manual chapter 18 §c (Agentic Coding Swarm Protocol).
+
+# Everything: the team that owns the project.
+*                               @your-org/project-team
+
+# The gates. Weakening any of them needs the playbook owner as well (MAINTAINING.md in the protocol repo).
+/swarm.json                     @your-org/project-team @your-org/playbook-owners
+/.github/workflows/             @your-org/project-team @your-org/playbook-owners
+/scripts/dev/                   @your-org/project-team @your-org/playbook-owners
+**/architecture.test.*          @your-org/project-team @your-org/playbook-owners
+**/docs.test.*                  @your-org/project-team @your-org/playbook-owners
+**/vitest.config.*              @your-org/project-team @your-org/playbook-owners
+/.claude/settings.json          @your-org/project-team @your-org/playbook-owners
+/CLAUDE.md                      @your-org/project-team @your-org/playbook-owners
+/AGENTS.md                      @your-org/project-team @your-org/playbook-owners
+
+# Operations and handover: whoever runs production signs off.
+/docs/runbook.md                @your-org/project-team @your-org/ops
+/docs/dependencies.md           @your-org/project-team @your-org/ops
+/docs/handover/                 @your-org/project-team
+/.env.example                   @your-org/project-team @your-org/ops
+
+# Decisions.
+/docs/adr/                      @your-org/project-team
+
+# Areas owned by another team (examples).
+# /src/billing/                 @your-org/payments
+# /infra/                       @your-org/platform

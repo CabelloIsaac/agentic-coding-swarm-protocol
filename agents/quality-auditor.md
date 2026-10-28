@@ -32,8 +32,10 @@ You report, verify and prioritize. You never fix.
    `git diff --stat` and `git diff --dirstat=files,5 <base>..<head>`, and counts in the diff of: `any`,
    `as unknown as`, `@ts-ignore`/`@ts-expect-error`, suppressions without a reason, `.skip`/`.only`/`.todo`,
    files crossing 500 lines, new allowlist entries in architecture tests. Each metric gets a value and a delta.
-4. **Review by area.** Split the diff by top-level area from the dirstat, largest risk first: money and external
-   effects, data and storage, auth, the agent loop and policy, then the rest. For each area look for:
+4. **Review by area.** Load the defect-class catalog (the path in your brief, else `checklists/defect-classes.md` in the project, else the copy in the swarm plugin (Glob `**/checklists/defect-classes.md`)): you use **all** of it, including the classes marked
+   `repo`, which only a sweep like this one can see. Split the diff by top-level area from the dirstat, largest risk
+   first: money and external effects, data and storage, auth, the agent loop and policy, then the rest. For each area
+   walk the matching classes, and look for:
    - **Likely bugs:** unhandled edges, swallowed errors, missing `await`, races, external effects without
      idempotency, writes outside the write pipeline, dates and time zones, spend without a budget check.
    - **Weak tests:** tests that would still pass if the change were reverted, no or trivial assertions, mocks that
@@ -47,7 +49,9 @@ You report, verify and prioritize. You never fix.
    a ≤ 700-word output format. As a subagent, review in passes yourself.
 5. **Verify.** Re-open the code for every High finding before writing it and mark it `confirmed` (you traced the
    failure) or `suspected` (plausible, not traced). Merge duplicates. Reuse the previous id when it is the same
-   problem; new ids are `AUD-<short-topic>`.
+   problem; new ids are `AUD-<short-topic>`. Tag each finding with its DC id. A finding with a `diff` class that
+   landed after the review gate existed is a review miss: say so in the Summary. A finding that fits no class is a
+   candidate new class: list it under "Proposed order" for the catalog.
 6. **Delta.** Classify every previous open `AUD-*`: still open, worse, or resolved (with the commit that resolved
    it). Any debt metric that rose needs a stated reason, or it is itself a Medium finding.
 
@@ -67,7 +71,7 @@ You report, verify and prioritize. You never fix.
 ## Metrics
 | metric | value | Δ vs previous | reason if it rose |
 ## High
-### AUD-<topic> · <area> · confirmed|suspected · new|open|worse
+### AUD-<topic> · <area> · DC-<id> · confirmed|suspected · new|open|worse
 path:line · failure scenario · impact · proposed fix
 ## Medium
 ## Low

@@ -1,20 +1,44 @@
 {
   "protocol": "swarm",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "level": 0,
   "integrationBranch": "main",
   "commands": {
+    "setup": "corepack enable && pnpm install --frozen-lockfile",
     "verify": "pnpm verify",
     "verifyQuick": "pnpm verify --quick",
     "commit": "pnpm wt:commit",
     "status": "pnpm wt:status",
     "land": "pnpm land",
     "newAdr": "docs/adr/draft-<slug>.md",
-    "audit": "pnpm audit:repo"
+    "audit": "pnpm audit:repo",
+    "ratchets": "node scripts/dev/ratchets.ts"
   },
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup",
     "stop": "node scripts/dev/wt.ts wip"
   },
-  "gates": []
+  "gates": [],
+  "review": {
+    "mode": "sensitive",
+    "sensitive": [
+      "**/auth/**",
+      "**/*auth*.*",
+      "**/session*/**",
+      "**/payments/**",
+      "**/billing/**",
+      "**/migrations/**",
+      "*.sql",
+      ".github/**",
+      ".githooks/**",
+      ".claude/**",
+      "swarm.json",
+      "scripts/dev/**",
+      "**/vitest.config.*",
+      "**/architecture.test.*",
+      "**/docs.test.*",
+      "biome.json",
+      "pnpm-lock.yaml"
+    ]
+  }
 }

@@ -1,0 +1,19 @@
+{
+  "//": "Quality ratchets (manual chapter 07). Values only ever tighten: verify checks them, land tightens and commits this file. Copy this file to the repo root, adapt include/exclude and the lint command, then run `node scripts/ratchets.ts --init` before the first commit: it replaces the placeholder numbers with today's state. To keep the coverage floor in vitest.config.ts instead, replace `floor` with \"floorFrom\": \"vitest.config.ts\".",
+  "fileSize": {
+    "max": 500,
+    "include": ["src/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "packages/**/*.{ts,tsx}", "scripts/**/*.ts"],
+    "exclude": ["**/*.test.{ts,tsx}", "**/*.d.ts", "playground/**"],
+    "exceptions": {}
+  },
+  "coverage": {
+    "summary": "coverage/coverage-summary.json",
+    "floor": { "lines": 80, "statements": 80, "functions": 80, "branches": 70 },
+    "maxGap": 1
+  },
+  "lintWarnings": {
+    "command": "npx biome lint --reporter=json --max-diagnostics=10000",
+    "budget": 0,
+    "perRule": {}
+  }
+}

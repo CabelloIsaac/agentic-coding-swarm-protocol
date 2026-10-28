@@ -6,7 +6,9 @@ repo.
 ## Level 0 · In an hour (no new code)
 
 - [ ] Copy `templates/CLAUDE.md` to the root and fill in the real commands (install, single-file test, types, lint).
-      Under 200 lines.
+      Under 200 lines. Every rule ends with `(enforced: <path>)`, naming the test, hook, script or CI job that holds
+      it, or with `(preference)`: be honest, a preference is fine as long as it is called one (the docs test checks
+      the markers from level 2).
 - [ ] Copy `templates/claude/settings.json` to `.claude/settings.json`: `deny` for `.env` and secrets, `ask` for
       `git push`.
 - [ ] Add `CLAUDE.local.md` and `.claude/settings.local.json` to `.gitignore`; copy `templates/claude/.gitignore` to
@@ -28,6 +30,10 @@ repo.
       jobs where they apply (CI ⊇ verify: backend parity, image without secrets, backup/restore roundtrip).
 - [ ] Domain contract validators for the project's own data files, as a `verify` step.
 - [ ] Coverage floor just below what is measured, in `vitest.config.ts`; `allowOnly: false` in CI.
+- [ ] Ratchets: `templates/quality-ratchets.json` at the root, initialized with `ratchets.ts --init`
+      (`reference/scripts/ratchets.ts`): no new file over 500 lines and oversized ones only shrink, the coverage
+      floor at most one point under measured, a lint warning budget. `verify` checks them after the tests (`--quick`:
+      file size of the changed files); `land` tightens and commits the file (chapter 07, Ratchets).
 - [ ] `docs/quality.md` from `templates/docs/quality.md`: types, suppressions with a reason, tests, flakiness.
 - [ ] The `verify` skill (`skills/verify/`).
 - [ ] Branch protection on GitHub: CI required.
@@ -41,7 +47,8 @@ repo.
 - [ ] A `pre-push` hook that lets only the publisher push the integration branch (`templates/githooks/pre-push`).
 - [ ] ADRs as drafts numbered on integration (`reference/scripts/adr.ts`) and a generated index.
 - [ ] An invariants table (start with 5) and its architecture test (`templates/tests/architecture.test.ts`).
-- [ ] A documentation test (`templates/tests/docs.test.ts`): links, paths, new undocumented structure.
+- [ ] A documentation test (`templates/tests/docs.test.ts`): links, paths, new undocumented structure, and the
+      rule markers of `CLAUDE.md` (every `enforced:` path exists).
 - [ ] Temp-file hygiene in tests (`reference/tests/cleanup-tmp.ts`, `vitest-setup.ts`) and a slowest-first sequencer.
 
 ## Level 3 · In a month (governance)
@@ -64,6 +71,24 @@ repo.
 - [ ] Question card and `Assumption:` trailers in `CLAUDE.md`.
 - [ ] T0–T3 tiers in `land`, in report mode for three days, then enforced.
 - [ ] Rollback criteria written with numbers.
+
+## Transferability track (alongside the levels; required before a handover)
+
+So that another team can absorb the project (chapter 18). Independent of the levels: start once level 1 is green.
+Check with `/swarm:adopt --check transfer`; all five must pass before the project is called "absorbable". (Not to be
+confused with the T0–T3 land tiers of level 4.)
+
+- [ ] **X1 · fresh clone:** one `commands.setup` in `swarm.json` takes a clean clone to a green `verify`;
+      `templates/github/workflows/fresh-clone.yml` runs it weekly with no caches.
+- [ ] **X2 · new-agent test:** `docs/handover/reference-task.md` from `templates/handover/reference-task.md`;
+      `templates/github/workflows/new-agent-test.yml` weekly with turn and budget caps (ask first: it spends and
+      sends code to a model); a passing report under 30 days old.
+- [ ] **X3 · ownership:** `.github/CODEOWNERS` from `templates/CODEOWNERS`; `docs/runbook.md` from
+      `templates/docs/runbook.md`; `docs/dependencies.md` from `templates/docs/dependencies.md`.
+- [ ] **X4 · no hidden knowledge:** the audit counts env vars, external services, scheduled jobs and active work that
+      live outside their documented place; the count is zero.
+- [ ] **X5 · handover checklist:** `checklists/handover.md` copied to `docs/handover/checklist.md`.
+- [ ] Incidents end with the `learn` skill: a rule with a mechanism, not a note in someone's memory.
 
 ## For high-demand teams (alongside the levels)
 

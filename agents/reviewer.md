@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Independent, read-only review of a branch diff before it lands. Runs lint, types and tests itself, checks the spec, repo invariants, test quality and docs, and reports only findings with ≥ 80% confidence. Use proactively after any non-trivial change (more than one logic file, or anything in core) and before land; not for one-line edits.
+description: Independent, read-only review of a branch diff before it lands. Runs lint, types and tests itself, checks the spec, the project's invariants table, the defect-class catalog, test quality and docs, and reports only findings with ≥ 80% confidence. Use proactively after any non-trivial change (more than one logic file, or anything in core) and before land; not for one-line edits.
 tools: Read, Grep, Glob, Bash
 model: opus
 color: green
@@ -32,8 +32,9 @@ state your assumption and continue.
    the change: logic, tests, docs, config, quality gates (verify/land scripts, lint, test or coverage config,
    architecture or docs tests, hooks, CI).
 2. **Rules.** Read the root `CLAUDE.md` and `AGENTS.md`, any `.claude/rules/*.md` whose `paths:` match the diff, the
-   invariants table in the architecture doc, and `docs/quality.md` if they exist. These are the rules you check;
-   cite them by file and line, never from memory.
+   project's **invariants table** (the path `CLAUDE.md` names, else the table in `docs/architecture*.md`), and
+   `docs/quality.md` if they exist. These are the rules you check; cite them by file and line, never from memory.
+   Then load the **defect-class catalog**: the path in your brief, else `checklists/defect-classes.md` in the project, else the copy in the swarm plugin (Glob `**/checklists/defect-classes.md`). Read its contents table; you check the classes marked `diff`.
 3. **Run, do not reason.** Find the project's commands in `CLAUDE.md` (the playbook default is `pnpm verify --quick`;
    otherwise lint, type-check and the tests of the touched packages). Run them and record each command with its
    last relevant lines. A red gate is the first finding. If a failure is a timeout, check `uptime` and rerun only
@@ -44,7 +45,9 @@ state your assumption and continue.
    inputs (empty, null, zero, boundary, duplicates, time zones), missing `await` and floating promises, swallowed
    errors (`catch {}`, a log and continue, a fallback that hides a failure, an optional chain that skips a required
    step), races between concurrent runs, resources not released, wrong status codes, migrations without a reversal.
-6. **Invariants.** The ones the diff can break, by its paths: storage access outside the storage layer; external
+6. **Invariants and defect classes.** Walk the invariants table row by row and, for each row the diff's paths can
+   touch, check the diff against it. Then walk the catalog's `diff` classes, using each one's *Detect* line (grep or
+   question) on the changed files. Typical invariant breaks: storage access outside the storage layer; external
    calls bypassing the gateway; writes bypassing the write pipeline; updates or deletes on an append-only log;
    records without `schema_version`; events without `actor` (and `run_id` inside a run); external effects without
    the idempotency wrapper; spend without a prior budget check; write tools exposed inside the agent loop; decisions
@@ -85,7 +88,8 @@ Scope: <base>..<head> · <n> files · spec: <path or "none">
 Gates: <command> → <pass/fail, last line> (one line per command)
 
 High
-1. path/file.ts:42 · <problem> · <trigger: input or state → wrong result> · <fix> · conf 90
+1. DC-IDEM-02 · path/file.ts:42 · <problem> · <trigger: input or state → wrong result> · <fix> · conf 90
+   (the DC id only when a class fits; an invariant break cites its row instead, e.g. INV-04)
 Medium
 1. …
 

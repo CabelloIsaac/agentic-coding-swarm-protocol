@@ -15,6 +15,7 @@ green.
 | **Every change** | self-review with evidence | the implementing agent | meets the spec; commands and outputs | summary with evidence in the session |
 | **Every non-trivial change** | independent review | `reviewer` subagent or `/code-review` | correctness, regressions, missing tests, repo rules | findings with a failure scenario |
 | **Every change on a sensitive path** | security review | `/security-review` or `security-reviewer` agent | auth, secrets, injection, SSRF, personal data, external effects | findings with severity |
+| **Every land on a covered path** | review gate | `land` | a passing review receipt for this exact change (`review.mode`) | abort, or `review-bypassed` in the land log |
 | **Every land** | full gate | `land` + `verify` | everything CI runs, serialized, on the current base | JSONL record of the attempt |
 | **Every T3 land** (designed) | human OK | tech lead | data, auth, spend, infra, the gates themselves, weakened tests | approval bound to file hashes |
 | **Daily** | integration-branch and error health | scheduled `daily-health` agent | CI on `main`, new production errors, untriaged team feedback, failed lands | short report + proposed tasks |
@@ -45,6 +46,43 @@ After any non-trivial change (more than one logic file, or anything in the core)
 - Format of each finding: `file:line` · problem · concrete failure scenario · proposed fix. If everything is fine,
   one line with the commands that prove it.
 - The implementer decides what to fix; anything dismissed is recorded with a reason.
+- Every reviewer checks the diff against [the defect classes](../checklists/defect-classes.md) marked `diff`, and
+  cites the class id in each finding (`DC-RUN-01 · src/run.ts:42 · …`). The builder walks the same classes before
+  it claims done.
+
+### The review gate
+
+**Rule:** where `swarm.json` → `review.mode` says so, a change does not land without a passing review receipt.
+
+Why: in the reference project the `reviewer` agent was a suggestion, and the biweekly audits kept finding defects
+that a per-change review would have stopped on the day they were written: runs opened outside their `try`, spend
+outside a run, a dedupe record written after the work, binaries stored in a JSON column, a `pass` with no
+evaluation. They surfaced up to ten days later, after other work had been built on top. A review that nothing
+requires is skipped exactly when the author is in a hurry, which is when it matters.
+
+How it works:
+
+1. The `review` skill dispatches the reviewers, verifies and triages their findings, and, once the branch is
+   committed and every High is fixed, writes a receipt keyed by the change's stable patch id
+   (`<git-common-dir>/swarm-reviews/<patch_id>.json`; format in INTEGRATION.md §1).
+2. `land`, after its rebase and before verify, checks the mode: `always` requires a receipt for every change;
+   `sensitive` (the default) only when a changed path matches `review.sensitive`; `off` never.
+3. A missing receipt, `changes_requested` or `open_high > 0` aborts the land: "run /swarm:review (no receipt for
+   this change)". `land --no-review "<reason>"` bypasses it, and the bypass is logged.
+
+Start with `sensitive` and the template's globs (auth, payments, migrations, CI, quality gates, agent settings,
+lockfile). Move to `always` once reviews are routine and cheap. The specification is in
+[reference/README.md](../reference/README.md) (`land`, review gate); the Node implementation is
+`reference/scripts/review-receipt.ts`.
+
+### Defect classes: what the audits taught the reviewers
+
+[checklists/defect-classes.md](../checklists/defect-classes.md) distills about 60 audit findings into classes, each
+with its symptom in a diff, a grep or question to detect it, the fix, its dimension, and whether a diff review can
+catch it (`diff`) or it needs a whole-repo audit (`repo`). Per-change reviewers use the `diff` classes; the weekly
+`quality-auditor` and the biweekly audit use all of them, tag every finding with its class, and call out each
+`diff`-class finding that slipped past the gate as a review miss. When an audit finds a defect no class describes,
+the fix includes a new class: the catalog is how an audit makes the next review better.
 
 ### Security review
 
@@ -179,3 +217,5 @@ need or a misplaced priority: decide which one in the monthly review.
 - Scheduled review in CI: `templates/github/workflows/weekly-review.yml`.
 - Biweekly audit skill: `skills/audit-repo/SKILL.md`.
 - Checklist: `checklists/README.md` (section "Review calendar").
+- Defect classes for every reviewer: `checklists/defect-classes.md`.
+- Review receipt and gate: `reference/scripts/review-receipt.ts`, `swarm.json` → `review`.

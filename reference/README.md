@@ -14,8 +14,11 @@ the config and the example rules first.
 
 ## Files
 
-Layout when adopted: `reference/scripts/` → `scripts/`, `reference/tests/` → `test/`, `reference/config/` → repo root
-(or `.githooks/`, `.github/workflows/`). Keep `scripts/` and `test/` as siblings: the tests import `../scripts/dev-flow.config.ts`.
+Layout when adopted: `reference/scripts/` → `scripts/dev/` (the path `swarm.json`, the hooks, `templates/CLAUDE.md` and
+`templates/claude/settings.json` all use), `reference/tests/` → `test/`, `reference/config/` → repo root (or `.githooks/`,
+`.github/workflows/`). The tests import `../scripts/dev-flow.config.ts`; after the move that import becomes
+`../scripts/dev/dev-flow.config.ts`. Add `verify.logDir` (default `tmp/verify`) to `.gitignore` before the first land: the
+log files verify writes would otherwise appear as "uncommitted change(s) appeared" and land would abort.
 
 | File | Spec section |
 |---|---|
@@ -23,11 +26,13 @@ Layout when adopted: `reference/scripts/` → `scripts/`, `reference/tests/` →
 | `reference/scripts/verify.ts` | `verify` — the single gate |
 | `reference/scripts/land.ts`, `reference/scripts/remote.ts` | `land` — serialized, always-green integration |
 | `reference/scripts/git.ts` | `land` (lock, stale detection, fast-forward helpers) and `wt` (worktree parsing) |
+| `reference/scripts/review-receipt.ts` | Review gate — receipts keyed by patch id (`write`, `check`) |
 | `reference/scripts/wt.ts` | `wt` — worktree tooling |
 | `reference/scripts/procs.ts` | Memory and process helpers |
 | `reference/scripts/adr.ts` | `adr` — conflict-free decision records |
 | `reference/scripts/roadmap.ts` | `roadmap` — derived status |
 | `reference/scripts/audit.ts` | `audit` — deterministic debt metrics |
+| `reference/scripts/ratchets.ts` | Quality ratchets — file size, coverage floor gap, lint budget (`check`, `--size-only`, `--tighten`, `--init`) |
 | `reference/scripts/playground.ts` | Sandbox for throw-away experiments (`playground:new`) |
 | `reference/scripts/test-tmp.ts`, `reference/scripts/vitest-setup.ts`, `reference/scripts/vitest-global-setup.ts`, `reference/tests/cleanup-tmp.ts`, `reference/tests/sequencer.ts` | Test infrastructure |
 | `reference/scripts/gitignore.test.ts` | Test infrastructure (caches must be ignored, or `wip:` commits swallow them) |
@@ -54,6 +59,7 @@ Put every project-specific constant in one file (for example `dev-flow.config.ts
 | `portBase` / `portRange` | `3200` / `400` | `wt setup` |
 | `adrDir` | `docs/adr` | `adr`, `land` |
 | `generatedFiles` | regex of framework-generated files to restore | `land`, `wt gc` |
+| `review` | `{ mode: 'sensitive', sensitive: ['**/auth/**', '**/migrations/**', '.github/**', …] }` (the `review` block of `swarm.json` on the integration branch wins) | `land`, `review-receipt` |
 
 The implementation adds a few more keys, all documented in `reference/scripts/dev-flow.config.ts`: `projectName` and `envPrefix`,
 `landMaxAttempts`, `staleLockMinutes`, `hooksDir`, `verify.optionalSuites` and `verify.ensureFiles`, `agentProcess`,
@@ -101,7 +107,7 @@ no `failed`, no coverage error, and the error count equals the count of
 
 ## `land` — serialized, always-green integration
 
-Flags: `--squash "<message>"`, `--no-push`. Retries: 3.
+Flags: `--squash "<message>"`, `--no-push`, `--no-review "<reason>"`. Retries: 3.
 
 1. **Guards (before the lock).** Must run from a linked worktree, on a named branch that is not the integration
    branch; no `.env` in the worktree; no uncommitted changes. Without `--squash`, refuse pending `wip:` commits.
@@ -113,7 +119,11 @@ Flags: `--squash "<message>"`, `--no-push`. Retries: 3.
 4. **Loop (≤ 3 attempts).**
    1. Rebase onto the integration branch. On conflict: list `--diff-filter=U` files, `rebase --abort`, log, exit.
       `land` never resolves conflicts.
-   2. If the rebase changed the lockfile blob, reinstall dependencies.
+   2. If the rebase changed the lockfile blob, reinstall dependencies. Then the **review gate** (next section): if
+      the review mode covers the change and there is no passing receipt for its patch id, abort with "run
+      /swarm:review (no receipt for this change)". It runs here, after the rebase and before the ADR commit, so the
+      patch id is the one the reviewer saw. With `--no-review "<reason>"` it is skipped and a `review-bypassed`
+      entry with the reason is logged (an empty reason is refused before the lock).
    3. Number draft ADRs and regenerate the ADR index; commit if anything changed.
    4. Record `verified = git rev-parse HEAD`, then run the full `verify`. On failure: "integration branch untouched".
    5. Require `HEAD == verified` and a clean tree (generated files restored first). Otherwise abort: something wrote
@@ -126,12 +136,43 @@ Flags: `--squash "<message>"`, `--no-push`. Retries: 3.
 5. **Publish** inside the lock: `git push <remote> refs/heads/<integration>:refs/heads/<integration>`. On failure,
    keep the local advance, print the manual command and exit 1.
 6. **Clean up:** run `wt gc`. A gc failure does not undo the land.
-7. **Log** every attempt as JSONL (`landed`, `failed` + reason, `conflict` + files) in
+7. **Log** every attempt as JSONL (`landed`, `failed` + reason, `conflict` + files, `review-bypassed` + reason) in
    `<git-common-dir>/<project>-land-log.jsonl`. These are your workflow metrics.
 8. Release the lock in `finally`.
 
 **PR mode** (for teams that integrate through pull requests): steps 1–4.4 run with the quick tier, then push the
 branch and open a PR with auto-merge; the merge queue runs the full gate and numbers ADRs.
+
+## Review gate — receipts
+
+**Purpose:** make the per-change review a gate of `land`, bound to the exact change that was reviewed.
+
+- **Receipt** (INTEGRATION.md §1): `{"patch_id", "base", "head", "reviewers": [], "verdict": "pass" |
+  "changes_requested", "open_high", "at"}`, one JSON file per change at `<git-common-dir>/swarm-reviews/<patch_id>.json`.
+  Local to the clone, shared by its worktrees, never committed.
+- **Key:** `git diff --no-color --no-ext-diff <integration>...HEAD | git patch-id --stable`, first field. It hashes
+  the change, not the commits: stable across `--squash` and a clean rebase, new for any further edit. If the
+  integration branch edits the context lines around a hunk, the id changes and the change is reviewed again.
+- **Writing:** the `review` skill writes it after triage and fixes, on the committed branch, with a documented
+  git + `printf` sequence (any stack) or `review-receipt.ts write --reviewers <a,b> --verdict <v> --open-high <n>`.
+  `write` refuses an empty change and a `pass` with `open_high > 0`.
+- **Config:** `review.mode` is `always`, `sensitive` or `off`; `review.sensitive` is a list of globs (`**` any depth,
+  `*` one segment, `?` one character; a pattern without `/` matches the basename at any depth). Read from
+  `swarm.json` **on the integration branch** (`git show <integration>:swarm.json`), so a branch cannot relax its own
+  gate; without it, from the config file. The template default is `sensitive`, with globs for auth and sessions,
+  payments and billing, migrations and SQL, CI and git hooks, agent settings (`.claude/**`), `swarm.json`, the dev
+  tooling, the test, coverage and lint configuration, the architecture and docs tests, and the lockfile.
+- **Check** (`reviewGate`, also `review-receipt.ts check`): `off` → pass. `sensitive` with no changed path
+  (`git diff --name-only --no-renames <integration>...HEAD`) matching → pass, not required. Otherwise, required: the
+  receipt for the current patch id must exist, parse, say `pass` and have `open_high: 0`; anything else fails with
+  the action to take. An empty change needs no receipt.
+- **Tests** (`reference/self-test/review-receipt.test.ts`, `node --test`): patch id stable across a rebase and new
+  after an edit; sensitive vs always vs off; missing and `changes_requested` receipts block; the branch's own
+  `swarm.json` cannot switch the gate off; land refuses without a receipt and lands with one after rebasing; the
+  `--no-review` reason is required and logged.
+
+**PR mode:** the equivalent is a required review on protected paths (`CODEOWNERS` with the sensitive globs) plus
+branch protection; the receipt is then the review approval on the pull request.
 
 ## `wt` — worktree tooling
 

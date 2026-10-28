@@ -12,23 +12,26 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
 ```json
 {
   "protocol": "swarm",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "level": 2,
   "integrationBranch": "main",
   "commands": {
+    "setup": "corepack enable && pnpm install --frozen-lockfile && pnpm seed",
     "verify": "pnpm verify",
     "verifyQuick": "pnpm verify --quick",
     "commit": "pnpm wt:commit",
     "status": "pnpm wt:status",
     "land": "pnpm land",
     "newAdr": "docs/adr/draft-<slug>.md",
-    "audit": "pnpm audit:repo"
+    "audit": "pnpm audit:repo",
+    "ratchets": "node scripts/dev/ratchets.ts"
   },
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup",
     "stop": "node scripts/dev/wt.ts wip"
   },
-  "gates": ["*/vitest.config.*", "*/architecture.test.*", "*/docs.test.*", "*/scripts/dev/*"]
+  "gates": ["*/vitest.config.*", "*/architecture.test.*", "*/docs.test.*", "*/scripts/dev/*"],
+  "review": { "mode": "sensitive", "sensitive": ["**/auth/**", "**/migrations/**", ".github/**", "swarm.json"] }
 }
 ```
 
@@ -40,16 +43,31 @@ after the conformance checks for that level pass (§6).
 | `protocol`, `version` | level 0 | Always `"swarm"`; the protocol version the project follows. A plugin refuses to act on a newer major. |
 | `level` | level 0 | Highest level whose conformance checks pass. Never set by hand. |
 | `integrationBranch` | level 0 | `main` unless stated. |
+| `commands.setup` | X1 (recommended from level 1) | One command that takes a clean clone to a state where `verify` passes. |
 | `commands.verify` | level 1 | The full gate. |
 | `commands.verifyQuick` | level 1 | The fast, change-scoped gate. |
 | `commands.commit`, `commands.status`, `commands.land` | level 2 | Session commit, session overview, serialized integration (or PR creation in PR mode). |
 | `hooks.sessionStart`, `hooks.stop` | level 2 | Run by the plugin hooks (§3). Optional for teams whose agents have no hooks; then §5 applies. |
 | `commands.newAdr` | level 2 | A command, or a path pattern for draft ADRs. |
 | `commands.audit` | level 3 | Offline debt metrics. |
+| `commands.ratchets` | optional (L1.6) | Checks `quality-ratchets.json`; with `--tighten`, rewrites it to the current values, only tightening. Default `node scripts/dev/ratchets.ts`. |
 | `gates` | optional | Extra file globs whose edits trigger the quality-gate warning. |
+| `review.mode`, `review.sensitive` | optional (L2.7) | When `land` requires a review receipt: `always`, `sensitive` (default: only if a changed path matches a `sensitive` glob) or `off`. Read from the integration branch, so a branch cannot relax its own gate. Template default: `sensitive`, with globs for auth, payments, migrations, CI, quality gates and settings. |
 
 Missing keys fall back to the defaults in the template (Node and pnpm). A skill that uses a fallback says so in its
 output, so a non-Node project notices immediately.
+
+**Review receipt.** The proof of a per-change review that `land` checks (L2.7). One JSON file per change, written by
+the `review` skill once the branch is committed and triaged, at `<git-common-dir>/swarm-reviews/<patch_id>.json`
+(local to the clone, never committed):
+
+```json
+{"patch_id": "...", "base": "<integration sha>", "head": "<sha>", "reviewers": ["reviewer", "security-reviewer"], "verdict": "pass|changes_requested", "open_high": 0, "at": "<iso>"}
+```
+
+`patch_id` is `git patch-id --stable` over `git diff <integration>...HEAD`: stable across a squash and a clean rebase
+(so it survives land's own rebase), new for any further edit. A receipt passes only with `verdict: "pass"` and
+`open_high: 0`. Specification and Node implementation: [reference/README.md](reference/README.md) (review gate).
 
 ## 2. What each command must guarantee
 
@@ -57,12 +75,14 @@ The names are free; the behaviour is the contract. Every guarantee below is some
 
 | Command | Must | Must never |
 |---|---|---|
+| `setup` | From a clean clone with only the prerequisites the README lists (runtime, package manager), install dependencies, create local config from `.env.example` with non-secret defaults and seed local data, so that `verify` exits 0 next. Be idempotent: a second run changes nothing. | Need a secret, a manual step, a tool not in the README's prerequisites, a cache, or network beyond package registries; modify tracked files. |
 | `verify` | Run every step of CI's quality job (CI ⊇ verify: CI may add documented jobs that need services, Docker or minutes, never skip a verify step), including the domain contract validators. Exit 0 if and only if every step is green. Print one line per step and the tail of each failure; keep full logs on disk and print their path. | Pass with a skipped, retried or "known flaky" step, unless the tolerance is a documented exact signature. |
 | `verifyQuick` | Run the steps affected by the diff against the integration branch, plus the structural tests. Finish in seconds to a few minutes. | Be accepted as the gate that closes a task. |
 | `commit` | Absorb a pending `wip:` commit and commit everything with the given message. | Push. |
 | `status` | List worktrees and branches with unintegrated work, dirty state and age. | Change anything. |
-| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
+| `land` | Serialize integrations (lock), refuse foreign commits on the remote, rebase, record the SHA, run full `verify`, fast-forward to that SHA, publish, log the attempt. Integrate exactly the commit it verified: if the branch tip moved or the tree changed during verify, abort (or start a new attempt). On any failure leave the integration branch untouched and exit non-zero with the reason. After the rebase and before verify, refuse a change without a passing review receipt for its patch id when `review.mode` requires it; `--no-review "<reason>"` skips that check and logs the reason. | Fast-forward to a branch name instead of the verified SHA; resolve conflicts, merge histories, or force-push. |
 | `audit` | Run offline with no spend, print metrics, optionally store a snapshot for deltas. | Fix anything. |
+| `ratchets` | Check `quality-ratchets.json`: no new file over the size limit and no exception above its recorded size; measured coverage neither below the floor nor more than `maxGap` above it; lint warnings within budget. Run last in the full `verify` (after the tests, which write the coverage summary); the quick tier checks file size on the changed files only. With `--tighten` (run by `land` after a green verify), move every value to the measured one in the tightening direction only; `land` commits the file alone on top of the verified SHA and aborts if that commit touches anything else. | Loosen a value (add an exception, lower a floor, raise a budget), or change any other file. |
 | `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
 | `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout, during a rebase or merge, or while a `land` of its branch is running. |
 
@@ -136,17 +156,20 @@ list by hand.
 | L0.3 | Secrets | `.claude/settings.json` denies reading `.env*` and secret files. |
 | L0.4 | Local files ignored | `git check-ignore CLAUDE.local.md .claude/settings.local.json` matches both. |
 | L0.5 | Decision log | `docs/adr/` holds at least the adoption ADR. |
+| L0.6 | Rules have mechanisms | every rule in `CLAUDE.md` ends with `(enforced: <path>, …)` or `(preference)`, every enforced path exists, and the docs test checks both (once it exists, level 2). |
 | L1.1 | Full gate | `commands.verify` exits 0 on a clean checkout of the integration branch. |
 | L1.2 | Quick gate | `commands.verifyQuick` exits 0 and is faster than the full gate. |
 | L1.3 | CI parity (CI ⊇ verify) | CI runs `commands.verify` (or exactly its steps) plus any extra jobs, each documented with why it is not in local verify; no step in the gate path may use `continue-on-error`. |
 | L1.4 | Coverage floor | a threshold is configured and enforced by the test step. |
 | L1.5 | No secrets in CI | the quality job reads no secrets. |
+| L1.6 | Ratchets | `quality-ratchets.json` exists and covers file size, coverage gap and lint budget; `verify` runs the check; `land` tightens it and commits only that file. |
 | L2.1 | Worktrees | the worktree directory is gitignored; the session start hook or §5 step 1 is documented. |
 | L2.2 | Session commands | `commands.commit`, `status` and `land` resolve to existing scripts. |
 | L2.3 | Protected integration | a `pre-push` publisher guard is installed (`git config core.hooksPath`) or branch protection is on. |
 | L2.4 | Invariants as tests | an architecture test exists and runs inside `verify`. |
 | L2.5 | Docs as tests | a docs test runs inside `verify` and checks both directions: links, cited paths and functions exist; every module, package or app, CLI command, extension guide (docs index) and ADR (ADR index) is documented; every invariant id in the table has a test and every tested id is in the table; prose uses one invariant numbering (no `INV-1` for `INV-01`). |
 | L2.6 | Non-Claude agents | `AGENTS.md` exists and states the §5 session protocol, or points to `CLAUDE.md` which does. |
+| L2.7 | Review gate | `land` requires a passing review receipt per `review.mode` (default `sensitive`) and the `review` skill writes receipts: a change touching a sensitive path, with no receipt, is refused with "run /swarm:review". |
 | L3.1 | Roadmap | a roadmap file exists and its validator runs inside `verify`. |
 | L3.2 | Audit | `commands.audit` runs offline and exits 0. |
 | L3.3 | Fresh audit | the latest audit report is under 14 days old. |
@@ -161,6 +184,32 @@ swarm check · level 1 · protocol 0.2.0
 ✓ L0.2 Agent memory        CLAUDE.md 142 lines, names "make verify"
 ✗ L1.3 CI parity           .github/workflows/ci.yml runs "pytest" but not "make verify"
 result: level 0 conformant; level 1 blocked by L1.3
+```
+
+### Transferability (X1–X5)
+
+`/swarm:adopt --check transfer` runs these checks ([chapter 18](manual/18-transferability-and-handover.md)). They
+are a separate track, independent of levels 0–3: a project at any level may run them, and none of them raises
+`level`. **All five are required before a project is declared "absorbable"**, that is, ready to be handed to another
+team (checklist: [checklists/handover.md](checklists/handover.md)). X1–X5 are unrelated to the T0–T3 land tiers of
+manual chapter 12.
+
+| Id | Check | Pass when |
+|---|---|---|
+| X1 | Fresh clone | `commands.setup` exists and meets §2; a scheduled CI job (template `templates/github/workflows/fresh-clone.yml`) runs setup and `verify` on a clean runner with no caches, and its latest run is green and under 14 days old. |
+| X2 | New-agent test | `docs/handover/reference-task.md` exists with an acceptance command; the latest new-agent test report (artifact of `templates/github/workflows/new-agent-test.yml`, or a copy in `docs/handover/reports/`) is under 30 days old with verdict `pass`. |
+| X3 | Explicit ownership | `CODEOWNERS` (root, `.github/` or `docs/`) has a catch-all owner and team handles; `docs/runbook.md` covers deploy, rollback, secrets rotation, alerts, on-call, scheduled jobs and known failure modes; `docs/dependencies.md` lists every external service with owner, payer, secrets, failure mode and rotation. No template placeholders (`<…>`) left. |
+| X4 | No hidden knowledge | the latest audit (under 14 days old) reports the hidden-knowledge count (manual chapter 18 §d: env vars missing from `.env.example`, external services missing from the inventory, scheduled jobs missing from the runbook, active work without a change) as zero, or every item has an owner and a date. |
+| X5 | Handover checklist | `docs/handover/checklist.md` exists, copied from the protocol's checklist, and names the current owning team. |
+
+```text
+swarm check · transfer · protocol 0.3.0
+✓ X1 Fresh clone           fresh-clone.yml green 2026-10-26 (2 days)
+✗ X2 New-agent test        last report 2026-09-14 (44 days), verdict pass
+✓ X3 Explicit ownership    CODEOWNERS 14 rules · runbook 7/7 sections · dependencies 6 services
+✓ X4 No hidden knowledge   audit 2026-10-20: 0 items
+✓ X5 Handover checklist    docs/handover/checklist.md · owner @acme/billing
+result: not absorbable; blocked by X2
 ```
 
 ## 7. Worked examples

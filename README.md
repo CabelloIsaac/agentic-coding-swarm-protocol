@@ -127,8 +127,8 @@ To enable it for everyone working on a project, commit this to the project's `.c
 
 | Component | Contents |
 |---|---|
-| **Skills** | `playbook` (routes a task to a skill or a question to one chapter), `worktree` (start, check and clean up session worktrees), `tdd` (test first, seen red, then green), `debug` (root cause before any fix; escalates after two failed fixes), `verify` (the full gate, with failure triage and evidence), `review` (dispatches the review agents and triages findings), `change` (spec-driven change lifecycle: explore, propose, apply, verify, archive), `extend` (adds a new piece by the repo's extension guide, or writes the guide), `new-adr` (draft decision records), `land` (serialized integration and every failure it reports), `audit-repo` (biweekly audit: five dimensions plus protocol conformance), `adopt` (level by level, with `--check` conformance) |
-| **Agents** | `builder` (implements a decided plan), `reviewer` (diff review, runs the gates), `security-reviewer` (exploitable issues only), `test-auditor` (tests that would survive a broken implementation), `debugger` (root cause and a red test), `docs-keeper` (docs back in sync), `architect` (options, recommendation, ADR draft), `quality-auditor` (scheduled weekly sweep) |
+| **Skills** | `playbook` (routes a task to a skill or a question to one chapter), `worktree` (start, check and clean up session worktrees), `tdd` (test first, seen red, then green), `debug` (root cause before any fix; escalates after two failed fixes), `verify` (the full gate, with failure triage and evidence), `review` (dispatches the review agents and triages findings), `change` (spec-driven change lifecycle: explore, propose, apply, verify, archive), `extend` (adds a new piece by the repo's extension guide, or writes the guide), `new-adr` (draft decision records), `land` (serialized integration and every failure it reports), `audit-repo` (biweekly audit: five dimensions plus protocol conformance), `adopt` (level by level, with `--check` conformance and `--check transfer`), `learn` (turns an incident into a rule with a mechanism, or a proposal for this protocol) |
+| **Agents** | `builder` (implements a decided plan), `reviewer` (diff review, runs the gates), `security-reviewer` (exploitable issues only), `test-auditor` (tests that would survive a broken implementation), `debugger` (root cause and a red test), `docs-keeper` (docs back in sync), `architect` (options, recommendation, ADR draft), `quality-auditor` (scheduled weekly sweep). Reviewers check every diff against the 46 defect classes in [checklists/defect-classes.md](checklists/defect-classes.md) |
 | **Hooks** | `SessionStart` / `Stop` worktree hooks that only act when the project has the flow scripts; a warning when an edit touches a quality gate |
 
 **Context cost.** Only the names and descriptions of model-invocable skills and agents sit in context on every
@@ -157,6 +157,7 @@ call them. The manual is never loaded wholesale: the `playbook` skill reads a si
 | 15 | [Review processes](manual/15-review-processes.md) | Who reviews what, and how often — per change, daily, weekly, biweekly, per release |
 | 16 | [Efficiency and real-world use](manual/16-efficiency-and-real-world-use.md) | Token economics, caching, effort and model routing, parallelism limits, rollout in real organizations |
 | 17 | [Agentic system architecture](manual/17-agentic-system-architecture.md) | Building a product that is an LLM agent: kernel/domain, read-only loop, policy and approvals, budget, write pipeline, idempotent effects, ledgers, agent-blind simulator, storage ports |
+| 18 | [Transferability and handover](manual/18-transferability-and-handover.md) | Proving another team can absorb the project: fresh-clone test, new-agent test, explicit ownership, no hidden knowledge, handover checklist |
 
 ## Repository layout
 
@@ -165,10 +166,12 @@ call them. The manual is never loaded wholesale: the `playbook` skill reads a si
 ├── AGENTS.md              Entry point for coding agents: what to read for each task
 ├── ADOPTION.md            Level-by-level adoption checklist (1 hour → 1 month)
 ├── INTEGRATION.md         Contract a project exposes: swarm.json, command guarantees, conformance checks, stacks
-├── manual/                18 chapters, one topic each
-├── checklists/            One-screen checklists for the key moments of a session
+├── MAINTAINING.md         Running the protocol inside a company: ownership, releases, updates, measurement
+├── manual/                19 chapters, one topic each
+├── checklists/            One-screen checklists, the defect-class catalog and the handover checklist
 ├── templates/             Drop-in files: CLAUDE.md, settings, CI, ADR, OpenSpec, tests, review prompts
-├── reference/             Reference implementation: specification plus generalized code (verify, land, worktree)
+├── reference/             Reference implementation: specification, generalized code and its self-tests (self-test/)
+├── evals/                 Skill eval suite for `claude plugin eval` (trigger and behaviour cases)
 ├── skills/                Claude Code skills shipped by the plugin
 ├── agents/                Subagent definitions shipped by the plugin
 ├── hooks/                 Plugin hooks, driven by the project's swarm.json (no-ops without it)
@@ -184,8 +187,9 @@ call them. The manual is never loaded wholesale: the `playbook` skill reads a si
 
 ## Status
 
-`v0.1` — the workflow, gates and review processes run daily in the reference project. Chapter 12 (autonomy and risk
-tiers) is a design that is not yet enforced there, and says so. See [CHANGELOG.md](CHANGELOG.md).
+`v0.3` — the workflow, gates and review processes run daily in the reference project; the reference `land`, `verify`,
+`wt`, `adr`, ratchets and review gate are covered by self-tests that CI runs on every push. Chapter 12 (autonomy and
+risk tiers) is a design that is not yet enforced there, and says so. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 

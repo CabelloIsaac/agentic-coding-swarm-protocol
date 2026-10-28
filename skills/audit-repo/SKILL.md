@@ -68,10 +68,23 @@ every gate green). Reports kept outside the repo left nothing to compare against
    often shows up in harness, scalability and security. Mark each `AUD-*` as new, still open, worse, partly
    resolved, resolved (with the commit or change) or reopened. Ids stay stable across audits. Every metric that rose
    becomes a finding or carries its reason.
+   - **Detection data, for every new finding.** `introduced`: the commit that introduced the defect, found with
+     `git log -S '<snippet>'`, `git blame -L <a>,<b> <file>` or `git log -L <a>,<b>:<file>`; write `unknown` when
+     history does not tell. `detected`: today (a carried-over finding keeps the date of the audit that first
+     reported it). `catchable_at_review`: `yes` when the defect was visible in the diff of the change that introduced
+     it and a class of [defect-classes.md](../../checklists/defect-classes.md) marked *diff* covers it; then the
+     per-change review let it escape. A *diff* finding with no class is a new class: propose it in the report.
+   - **Rules that erode.** When a finding or a risen metric breaks a rule written in `CLAUDE.md`, record that rule.
+     If the rule is marked `(preference)`, propose the mechanism that would enforce it (a ratchet, a test, a hook);
+     if it is marked `enforced:`, the mechanism has a hole: that is a finding of its own.
 
-5. **Report.** `{audit} --write` (stores `openspec/audits/<date>.metrics.json`), then write
-   `openspec/audits/<YYYY-MM-DD>.md` from [skeleton.md](skeleton.md). Commit both with
-   `{commit} "audit: report <date>"` and integrate with `{land}`.
+5. **Report.** Write the findings with their detection data to `openspec/audits/<date>.findings.json` (an array of
+   `{ id, severity, introduced, detected, catchable_at_review, rule? }`), then run
+   `{audit} --write --findings openspec/audits/<date>.findings.json`: it stores
+   `openspec/audits/<date>.metrics.json` with the median detection latency, the escape rate, the count of
+   `preference` rules and the rules found eroding. Write `openspec/audits/<YYYY-MM-DD>.md` from
+   [skeleton.md](skeleton.md). Commit the three files with `{commit} "audit: report <date>"` and integrate with
+   `{land}`.
 
 ## Severity
 
@@ -89,13 +102,16 @@ the scenario holds) or **suspected** (plausible, not proven).
 | "Warnings went up a bit; not worth mentioning." | No debt metric rises without a written reason. |
 | "The demo run failed; report the code as broken." | Investigate first: dirty seed data fails it too. Report the cause. |
 | "No previous report, so no trend section." | Then this report is the baseline; say so. |
+| "Finding the introducing commit takes too long; skip it." | `git log -S` takes seconds. Without `introduced` there is no latency, and nobody learns which review let it through. `unknown` is fine when history truly does not tell. |
+| "The rule is in CLAUDE.md, so it is covered." | A rule marked `preference` is held by habit only. In the reference project the coverage floor sat 2.7 points under measured for 19 days with the rule written down. Propose the mechanism. |
 | "I will save the report in docs/." | The docs test requires cited paths to exist; reports cite code that later moves. Use `openspec/audits/`. |
 | "Run the full suite while the subagents work." | Under memory pressure both slow down and time out. Heavy checks go after the subagents. |
 | "Run all subagents one after another." | Launch them in one message; serialize only the heavy commands. |
 
 ## Output in chat
 
-Five lines: commit and mode; counts by severity (new / open / resolved); the top two findings; metric deltas that
-rose; an offer to open a change for the first block of the proposed order. Nothing is fixed unless the human asks.
+Six lines: commit and mode; counts by severity (new / open / resolved); the top two findings; metric deltas that
+rose; median detection latency and escape rate with their trend; an offer to open a change for the first block of
+the proposed order. Nothing is fixed unless the human asks.
 
 Depth: [chapter 09](../../manual/09-periodic-audit.md), [chapter 15](../../manual/15-review-processes.md).

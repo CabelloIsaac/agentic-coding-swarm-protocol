@@ -1,16 +1,17 @@
 ---
 name: adopt
-description: Adopts the Swarm Protocol in the current repository one level at a time (0 to 3), writing and maintaining swarm.json, merging the templates into what the repo already has, and proving each level with the conformance checks; --check reports conformance without changing anything. Use only when the user explicitly asks to adopt, install, upgrade or check the protocol in a repo.
+description: Adopts the Swarm Protocol in the current repository one level at a time (0 to 3), writing and maintaining swarm.json, merging the templates into what the repo already has, and proving each level with the conformance checks, plus the separate transferability track (X1–X5); --check reports conformance and version drift without changing anything. Use only when the user explicitly asks to adopt, install, upgrade or check the protocol in a repo.
 disable-model-invocation: true
-argument-hint: "[0|1|2|3] [--plan] | --check [level]"
+argument-hint: "[0|1|2|3|transfer] [--plan] | --check [level|transfer]"
 ---
 
 # adopt
 
 Say at the start: "Using adopt (<level>, <plan|apply|check>)."
 
-Arguments: `$ARGUMENTS`. A level number (default `0`); `--plan` writes the plan and stops; `--check [level]` runs
-the conformance checks up to that level (default: the `level` in `swarm.json`) and changes nothing.
+Arguments: `$ARGUMENTS`. A level number (default `0`), or `transfer` for the transferability track; `--plan`
+writes the plan and stops; `--check [level]` runs the conformance checks up to that level (default: the `level` in
+`swarm.json`) and changes nothing; `--check transfer` runs the X1–X5 checks and changes nothing.
 
 **The contract lives in [INTEGRATION.md](../../INTEGRATION.md)**: the `swarm.json` manifest (§1), what each command
 must guarantee (§2), stack equivalents (§4), agents without plugins (§5) and the conformance checks (§6). Read the
@@ -40,8 +41,28 @@ not working teaches the team to ignore the protocol (chapter 16 §0).
 
 Run every check in INTEGRATION.md §6 for levels 0…level, in order. Write nothing. Output exactly the §6 format: one
 line per check with `✓`/`✗`, its id, name and evidence, then
-`result: level N conformant; level N+1 blocked by <ids>`. Also report when the project's `version` is behind the
-plugin's (`${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json`).
+`result: level N conformant; level N+1 blocked by <ids>`.
+
+**Version check, every `--check`.** Read the plugin's `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`,
+or, when that variable is unset, `${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json`. Compare it with `version`
+in `swarm.json` as semver and add one line before `result:`:
+
+| Project vs plugin | Line |
+| --- | --- |
+| equal | `✓ version <v> (plugin <v>)` |
+| behind (older minor or patch) | `! version <p> behind plugin <v>: new checks or keys may apply · https://github.com/AntoniArco/agentic-coding-swarm-protocol/blob/main/CHANGELOG.md` and the CHANGELOG headings between the two versions (`${CLAUDE_SKILL_DIR}/../../CHANGELOG.md`). |
+| behind by a major | as above, plus "read the migration note before raising `version`". |
+| ahead of the plugin | `✗ version <p> newer than plugin <v>: claude plugin marketplace update agentic-coding-swarm-protocol`. On a newer major, stop: run no checks (INTEGRATION.md §1). |
+
+Being behind is reported, never fixed by `--check`: raising `version` is an adoption step done with `--plan`.
+
+### `--check transfer`
+
+Run X1–X5 from INTEGRATION.md § "Transferability (X1–X5)", plus the version check. Write nothing; read CI state with
+`gh run list --workflow <file> --limit 1 --json conclusion,createdAt` when `gh` is available, and say "not
+verifiable here" (✗) when it is not. Output the same format, ending with
+`result: absorbable` or `result: not absorbable; blocked by <ids>`. This track is independent of `level`: never
+raise or lower `level` from it.
 
 ### `--plan` and apply
 
@@ -65,7 +86,8 @@ plugin's (`${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json`).
    `docs/adr/draft-adopt-agentic-coding-swarm-protocol.md` from the ADR template (context = what you detected; decision = level,
    scenario, commands; consequences; confirmation = the §6 checks; alternatives). With `--plan`: stop and ask the
    user to **confirm the commands and the scenario** in five lines or fewer.
-5. **Apply.** Follow [levels.md](levels.md) for the level. Only that level.
+5. **Apply.** Follow [levels.md](levels.md) for the level. Only that level. For `transfer`, its own section in
+   levels.md; it needs a green level 1 (a working `verify`), not a higher level.
 6. **Check.** Run `--check <level>`. All green → set `"level": <level>` in `swarm.json`. Red → fix, or stop and
    report; never raise the level over a red check.
 7. **Wrap up.** One commit: `feat(dev-flow): swarm protocol level <N>`. Integrate the repo's way (land at level 2+,
@@ -84,6 +106,8 @@ plugin's (`${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json`).
 | "Install the publisher pre-push for this PR team." | Scenarios D and E use branch protection instead. |
 | "Enable the scheduled reviews while I am here." | They spend money and send code to a model: ask explicitly first. |
 | "The check is almost green; raise the level anyway." | `level` means conformant. Fix the check or leave the level. |
+| "Level 3, so it is easy to hand over." | Levels do not prove transferability. Only `--check transfer` does. |
+| "I will fill the runbook from what I can infer." | Placeholders the team must answer stay as questions to the user; a guessed rollback is worse than none. |
 
 ## Output
 

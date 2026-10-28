@@ -3,8 +3,13 @@
  * nothing else in this folder hard-codes a branch, a prefix, a path or a command. Adopting the tooling means editing
  * this file, not the scripts.
  *
- * Pure data and types: this file imports nothing, so it can be loaded from anywhere without import cycles.
+ * Pure data and types: this file imports nothing from this folder, so it can be loaded from anywhere without import cycles.
+ *
+ * `DEV_FLOW_CONFIG=<path to a JSON file>` is merged over these defaults when the module loads (plain objects are merged
+ * key by key; arrays and scalars are replaced). The self-tests use it to point the scripts at a throw-away repo. JSON
+ * has no regular expressions, so the `RegExp` keys keep their defaults.
  */
+import { readFileSync } from 'node:fs';
 
 export interface VerifyStep {
   name: string;
@@ -35,6 +40,15 @@ export interface OptionalSuite {
   envVar: string;
   /** Hint shown when the suite is skipped. */
   hint: string;
+}
+
+/** When `land` requires a review receipt (INTEGRATION.md L2.7). */
+export type ReviewMode = 'always' | 'sensitive' | 'off';
+
+export interface ReviewConfig {
+  mode: ReviewMode;
+  /** Globs (`**`, `*`, `?`; no `/` = basename at any depth) whose change makes a review mandatory in `sensitive` mode. */
+  sensitive: string[];
 }
 
 export interface Config {
@@ -135,14 +149,23 @@ export interface Config {
     auditHint: string;
   };
 
+  /**
+   * Quality ratchets (`ratchets.ts`): debt metrics that may only improve. `file` is checked by verify and tightened by
+   * land, which commits it with `commitMessage` on top of the verified SHA; that commit may contain only this file.
+   */
+  ratchets: { file: string; commitMessage: string };
+
   /** Sandbox folder for throw-away experiments; nothing in the product may import from it. */
   playgroundDir: string;
 
   /** Paths that must be git-ignored (checked by `gitignore.test.ts`): caches that sneak into `wip:` commits. */
   mustBeGitignored: string[];
+
+  /** Review gate of `land`. The `review` block of `swarm.json` on the integration branch, when present, wins. */
+  review: ReviewConfig;
 }
 
-export const config: Config = {
+const defaults: Config = {
   projectName: 'myproject',
   envPrefix: 'MYPROJECT_',
   integrationBranch: 'main',
@@ -177,12 +200,17 @@ export const config: Config = {
       // A MODIFIED delta that omits scenarios breaks `openspec archive` once nobody remembers the change
       { name: 'openspec', cmd: 'pnpm -s exec openspec validate --all --no-interactive' },
       { name: 'tests + coverage', cmd: 'pnpm -s test:coverage --maxWorkers=50%', serial: true },
+      // After the tests: the coverage ratchet reads the summary they just wrote. A rule without a mechanism erodes
+      // (file size, coverage gap and lint budget all drifted with every gate green before this step existed).
+      { name: 'ratchets', cmd: 'node scripts/dev/ratchets.ts', serial: true },
     ],
     // Import-graph test selection misses tests that read YAML or templates without importing them: the quick tier
     // never closes a task.
     quick: [
       { name: 'lint', cmd: 'pnpm -s exec biome lint --no-errors-on-unmatched', appendChanged: /^(src|packages|apps|scripts)\/.*\.tsx?$/, first: true },
       { name: 'typecheck', cmd: 'pnpm -s typecheck' },
+      // Only the file-size ratchet, only on changed files: coverage and the lint budget need the full run
+      { name: 'file size', cmd: 'node scripts/dev/ratchets.ts --size-only', appendChanged: /\.(ts|tsx)$/, first: true },
       { name: 'structural rules', cmd: 'pnpm -s test:arch', serial: true },
       { name: 'tsc app-a', cmd: 'npx tsc --noEmit -p apps/app-a', whenChanged: /^apps\/app-a\// },
       { name: 'tsc app-b', cmd: 'npx tsc --noEmit -p apps/app-b', whenChanged: /^apps\/app-b\// },
@@ -234,10 +262,58 @@ export const config: Config = {
     auditHint: 'run the audit skill and `pnpm audit:repo`',
   },
 
+  ratchets: { file: 'quality-ratchets.json', commitMessage: 'chore: tighten quality ratchets' },
+
   playgroundDir: 'playground',
 
   mustBeGitignored: ['tmp/generation-cache/example/abc.json'],
+
+  // Paths where a defect costs money, data or trust, plus the gates themselves: a change touching any of them does not
+  // land without a passing review receipt. Mirrors the `review` block of templates/swarm.json, for this layout.
+  review: {
+    mode: 'sensitive',
+    sensitive: [
+      '**/auth/**',
+      '**/*auth*.*',
+      '**/session*/**',
+      '**/payments/**',
+      '**/billing/**',
+      '**/migrations/**',
+      '*.sql',
+      '.github/**',
+      '.githooks/**',
+      '.claude/**',
+      'swarm.json',
+      'scripts/dev/**',
+      '**/vitest.config.*',
+      '**/architecture.test.*',
+      '**/docs.test.*',
+      'biome.json',
+      'pnpm-lock.yaml',
+    ],
+  },
 };
+
+type Plain = Record<string, unknown>;
+const isPlain = (v: unknown): v is Plain => typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof RegExp);
+
+function merge(base: Plain, over: Plain): Plain {
+  const out: Plain = { ...base };
+  for (const [key, value] of Object.entries(over)) {
+    const current = out[key];
+    out[key] = isPlain(current) && isPlain(value) ? merge(current, value) : value;
+  }
+  return out;
+}
+
+function withOverride(base: Config, file: string | undefined): Config {
+  if (!file) return base;
+  const over: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  if (!isPlain(over)) throw new Error(`DEV_FLOW_CONFIG ${file} must hold a JSON object`);
+  return merge(base as unknown as Plain, over) as unknown as Config;
+}
+
+export const config: Config = withOverride(defaults, process.env.DEV_FLOW_CONFIG);
 
 /** Name of the environment variable that replaces the verification command (only for the land script's own tests). */
 export const landVerifyEnv = `${config.envPrefix}LAND_VERIFY`;

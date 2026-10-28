@@ -5,16 +5,25 @@
  *   pnpm audit:repo --write         also save <audit dir>/<date>.metrics.json (the next run compares against it)
  *   pnpm audit:repo --deps          include `pnpm audit --prod` (network); everything else is local and takes seconds
  *   pnpm audit:repo --json          JSON output instead of the table
+ *   pnpm audit:repo --write --findings <file.json>
+ *                                   also store the report's findings with their detection data (see `FindingRecord`):
+ *                                   median detection latency, escape rate and rules found eroding go in the snapshot
  *
  * It measures what the `verify` gates let through without failing: lint warnings and their trend, type escapes, big
  * files, TODOs, nearly-done or stalled spec changes, spec validation errors, undocumented environment variables,
  * secret patterns in versioned files and the age of the last audit. It runs no tests and spends no money.
+ *
+ * Noise: the `any`, `@ts-ignore`, TODO and big-file counts skip the playground and this script's own source (its
+ * regexes match themselves); in the reference project those two inflated `any` by 6 and TODO by 17 in one audit.
+ * Rules: the bullets of CLAUDE.md are counted by marker (`enforced:` / `preference` / unmarked), so a rule nothing
+ * enforces stays visible.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { config } from './dev-flow.config.ts';
 import { toplevel } from './git.ts';
+import { countLines } from './ratchets.ts';
 
 const A = config.audit;
 export const AUDITS_DIR = A.dir;
@@ -26,6 +35,30 @@ export interface ChangeProgress {
   id: string;
   done: number;
   total: number;
+}
+
+/**
+ * One finding of the report, as the audit skill writes it to the `--findings` file. `introduced` is the commit that
+ * introduced the defect (`git log -S`, `git blame`, `git log -L`) or "unknown"; `detected` the date of the audit that
+ * first reported it (carried-over findings keep theirs); `catchable_at_review` whether a per-change diff review with
+ * the defect-class catalog would have caught it; `rule` the CLAUDE.md rule it erodes, if any.
+ */
+export interface FindingRecord {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  introduced: string;
+  detected: string;
+  catchable_at_review: boolean;
+  rule?: string;
+}
+
+export interface Detection {
+  findings: (FindingRecord & { latency_days?: number })[];
+  /** Findings first detected in this audit; the figures below are over these only, so nothing counts twice. */
+  new: number;
+  median_latency_days?: number;
+  /** New findings a per-change review could have caught, over all new findings (0–1). */
+  escape_rate?: number;
 }
 
 export interface Metrics {
@@ -42,6 +75,8 @@ export interface Metrics {
   coverage: { thresholds: Record<string, number>; measured?: Record<string, number> };
   deps?: Record<string, number>;
   last_audit_days?: number;
+  rules?: { total: number; enforced: number; preference: number; unmarked: number; eroding?: string[] };
+  detection?: Detection;
 }
 
 const run = (cwd: string, cmd: string, args: string[]): string => {
@@ -53,6 +88,19 @@ const run = (cwd: string, cmd: string, args: string[]): string => {
     return out ? String(out) : '';
   }
 };
+
+/** Folders and files whose code is not the product: counting them measures noise. */
+export function isMetricNoise(file: string, self = selfPath()): boolean {
+  return file.startsWith(`${config.playgroundDir}/`) || file === self;
+}
+
+function selfPath(): string {
+  try {
+    return relative(toplevel(import.meta.dirname), import.meta.filename);
+  } catch {
+    return '';
+  }
+}
 
 /** Versioned source files, without tests or generated ones. */
 export function sourceFiles(cwd: string): string[] {
@@ -199,11 +247,68 @@ function depsAudit(cwd: string): Record<string, number> | undefined {
   }
 }
 
+/** CLAUDE.md bullets by marker: `(enforced: <path>, …)`, `(preference)` or none (the docs test rejects none). */
+export function countRules(md: string): NonNullable<Metrics['rules']> {
+  const bullets: string[] = [];
+  let inSection = false;
+  let current: number | undefined;
+  for (const line of md.replace(/```[\s\S]*?```/g, '').split('\n')) {
+    if (line.startsWith('## ')) {
+      inSection = true;
+      current = undefined;
+    } else if (inSection && /^[-*] /.test(line)) current = bullets.push(line.slice(2).trim()) - 1;
+    else if (current !== undefined && /^\s+\S/.test(line)) bullets[current] += ` ${line.trim()}`;
+    else current = undefined;
+  }
+  const enforced = bullets.filter((b) => /\(enforced: [^()]+\)$/.test(b)).length;
+  const preference = bullets.filter((b) => /\(preference\)$/.test(b)).length;
+  return { total: bullets.length, enforced, preference, unmarked: bullets.length - enforced - preference };
+}
+
+const median = (xs: number[]): number | undefined => {
+  if (!xs.length) return undefined;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : ((s[mid - 1] as number) + (s[mid] as number)) / 2;
+};
+
+/** Days from the commit that introduced each finding to the audit that detected it; median and escape rate over the new ones. */
+export function detection(findings: FindingRecord[], date: string, commitDate: (sha: string) => string | undefined): Detection {
+  const withLatency = findings.map((f): Detection['findings'][number] => {
+    const since = f.introduced && f.introduced !== 'unknown' ? commitDate(f.introduced) : undefined;
+    const latency = since ? Math.round((new Date(f.detected).getTime() - new Date(since.slice(0, 10)).getTime()) / 86_400_000) : undefined;
+    return latency === undefined ? { ...f } : { ...f, latency_days: latency };
+  });
+  const fresh = withLatency.filter((f) => f.detected === date);
+  const latencies = fresh.flatMap((f) => (f.latency_days === undefined ? [] : [f.latency_days]));
+  return {
+    findings: withLatency,
+    new: fresh.length,
+    median_latency_days: median(latencies),
+    escape_rate: fresh.length ? Math.round((fresh.filter((f) => f.catchable_at_review).length / fresh.length) * 100) / 100 : undefined,
+  };
+}
+
+/** Reads the skill's findings file (an array, or `{ findings: [...] }`) and adds the detection data to the metrics. */
+export function withFindings(cwd: string, m: Metrics, file: string): Metrics {
+  const raw = JSON.parse(readFileSync(file, 'utf8')) as FindingRecord[] | { findings: FindingRecord[] };
+  const findings = (Array.isArray(raw) ? raw : raw.findings).map((f) => ({ ...f, detected: f.detected || m.date, introduced: f.introduced || 'unknown' }));
+  const commitDate = (sha: string) => {
+    const out = run(cwd, 'git', ['show', '-s', '--format=%cI', sha]).trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(out) ? out : undefined;
+  };
+  const eroding = [...new Set(findings.flatMap((f) => (f.rule ? [f.rule] : [])))];
+  return { ...m, detection: detection(findings, m.date, commitDate), ...(m.rules ? { rules: { ...m.rules, eroding } } : {}) };
+}
+
 export function collect(cwd: string, opts: { deps?: boolean; today?: Date } = {}): Metrics {
   const today = opts.today ?? new Date();
-  const files = sourceFiles(cwd).map((file) => ({ file, text: readFileSync(join(cwd, file), 'utf8') }));
+  const sources = sourceFiles(cwd).map((file) => ({ file, text: readFileSync(join(cwd, file), 'utf8') }));
+  // The product's code only: the playground and this script's own regexes are not debt
+  const files = sources.filter((f) => !isMetricNoise(f.file));
   const big = files
-    .map(({ file, text }) => ({ file, lines: text.split('\n').length }))
+    // Counted like the file-size ratchet, so the audit and the gate agree on what is over the limit
+    .map(({ file, text }) => ({ file, lines: countLines(text) }))
     .filter((f) => f.lines > BIG_FILE_LINES)
     .sort((a, b) => b.lines - a.lines);
   const all = changesProgress(cwd);
@@ -226,6 +331,7 @@ export function collect(cwd: string, opts: { deps?: boolean; today?: Date } = {}
     coverage: coverageMetrics(cwd),
     ...(opts.deps ? { deps: depsAudit(cwd) } : {}),
     last_audit_days: lastAuditDays(cwd, today),
+    ...(existsSync(join(cwd, 'CLAUDE.md')) ? { rules: countRules(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8')) } : {}),
   };
 }
 
@@ -267,6 +373,18 @@ export function renderTable(m: Metrics, prev?: Metrics): string {
   rows.push(['Coverage · floor / measured', `${th} / ${me}`, '']);
   if (m.deps) rows.push(['`pnpm audit --prod`', Object.entries(m.deps).map(([k, v]) => `${k} ${v}`).join(', ') || '0', '']);
   rows.push(['Last audit', m.last_audit_days === undefined ? 'none recorded' : `${m.last_audit_days} days ago`, '']);
+  if (m.rules) {
+    num('CLAUDE.md rules marked `preference`', m.rules.preference, prev?.rules?.preference, ` of ${m.rules.total}`);
+    num('CLAUDE.md rules without a marker', m.rules.unmarked, prev?.rules?.unmarked);
+    if (m.rules.eroding?.length) rows.push(['Rules found eroding', m.rules.eroding.join('; '), '']);
+  }
+  if (m.detection) {
+    const d = m.detection;
+    const pd = prev?.detection;
+    rows.push(['Detection · new findings', `${d.new}`, delta(d.new, pd?.new)]);
+    rows.push(['Detection · median latency (days)', d.median_latency_days === undefined ? 'unknown' : `${d.median_latency_days}`, d.median_latency_days === undefined ? '' : delta(d.median_latency_days, pd?.median_latency_days)]);
+    rows.push(['Detection · escape rate (catchable at review)', d.escape_rate === undefined ? '—' : `${Math.round(d.escape_rate * 100)} %`, d.escape_rate === undefined || pd?.escape_rate === undefined ? '' : delta(Math.round(d.escape_rate * 100), Math.round(pd.escape_rate * 100))]);
+  }
   const header = `| Metric | ${m.date} · ${m.commit} | Δ vs ${prev ? `${prev.date} · ${prev.commit}` : '—'} |\n|---|---|---|`;
   return [header, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n');
 }
@@ -281,7 +399,11 @@ export function writeSnapshot(cwd: string, m: Metrics): string {
 
 async function main(argv: string[]): Promise<void> {
   const cwd = toplevel(process.cwd());
-  const m = collect(cwd, { deps: argv.includes('--deps') });
+  const findingsAt = argv.indexOf('--findings');
+  const findingsFile = findingsAt >= 0 ? argv[findingsAt + 1] : undefined;
+  if (findingsAt >= 0 && !findingsFile) throw new Error('--findings needs a JSON file');
+  const collected = collect(cwd, { deps: argv.includes('--deps') });
+  const m = findingsFile ? withFindings(cwd, collected, resolve(process.cwd(), findingsFile)) : collected;
   const prev = previousSnapshot(cwd, m.date);
   if (argv.includes('--json')) console.log(JSON.stringify({ metrics: m, previous: prev?.date }, null, 2));
   else console.log(renderTable(m, prev));

@@ -13,6 +13,8 @@ For each open finding, say whether it is still open, worse, partly resolved or r
 Output, ≤ 700 words. Per finding:
 AUD-<stable-topic-id> · severity (high/medium/low) · confirmed|suspected
 file:line · failure scenario · impact · proposed fix
+introduced <sha7, found with git log -S '<snippet>', git blame -L or git log -L; or "unknown"> · class <DC-… from
+checklists/defect-classes.md, or "none"> · catchable at review yes|no (yes when the class is caught in the diff)
 Reuse the previous id when it is the same finding.
 High = breaks an invariant, causes real bugs, is exploitable, or loses money or data.
 Medium = erodes structure or will cause bugs at scale. Low = debt with no near-term failure.

@@ -17,6 +17,8 @@ jobs:
           node-version: 24
       - name: Links and cited paths resolve
         run: node scripts/check-links.mjs
+      - name: Eval suite loads (structure only, no model calls)
+        run: node scripts/check-evals.mjs
       - name: JSON manifests parse
         run: |
           for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json templates/claude/settings.json; do
@@ -26,3 +28,17 @@ jobs:
         run: |
           npm install -g @anthropic-ai/claude-code
           claude plugin validate .
+  self-test:
+    # The reference implementation runs against throw-away git repositories: land, wt, verify, adr and the rest.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Reference self-tests
+        # A quoted glob, expanded by Node itself: Node 24 does not search a bare directory argument (Node 26 does)
+        run: node --test 'reference/self-test/*.test.ts'

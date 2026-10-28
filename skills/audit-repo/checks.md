@@ -12,6 +12,7 @@ pnpm test:arch                                  # architecture and docs tests
 pnpm <domain validators>                        # catalog, tenant or config validators the gate runs
 pnpm exec openspec validate --all --no-interactive
 pnpm audit --prod                               # once per audit (or {audit} --deps)
+node scripts/dev/ratchets.ts --size-only        # file-size ratchet (the full check needs a coverage run: heavy)
 git status --short <seed data dirs> <runtime storage dirs>   # did anything dirty the seed or tracked storage?
 git log --oneline --grep '^wip' <integration branch>         # stray work-in-progress commits that reached it
 ```
@@ -20,6 +21,7 @@ git log --oneline --grep '^wip' <integration branch>         # stray work-in-pro
 
 ```bash
 pnpm test                                       # with coverage only if memory allows
+node scripts/dev/ratchets.ts                    # after a coverage run: size, coverage gap and lint budget
 pnpm <end-to-end demo or acceptance run>        # mock modes only, never spends
 ```
 
@@ -51,7 +53,11 @@ A red check is a symptom. Before it enters the report, find which of these it is
 Before trusting a delta from `{audit}`:
 
 - It excludes playground, sandbox, vendored and generated folders, and copies of fixtures.
-- It excludes its own source: the patterns that count `any`, `@ts-ignore` or `TODO` match themselves.
+- It excludes its own source: the patterns that count `any`, `@ts-ignore` or `TODO` match themselves. The
+  reference `audit.ts` skips the playground and itself since 0.3.0; an older copy inflated `any` by 6 and TODO by 17
+  in one audit.
+- A ratchet that holds (`quality-ratchets.json` checked in `verify`) makes its metric's rise impossible; a metric
+  that rose without a ratchet is a candidate for one.
 - It reports secrets by path only, never by value; known fake fixtures are listed as such.
 - A rise explained by the metric itself is a finding about the metric (stable id, for example `AUD-metrics-noise`),
   and the product's real value is written next to it.

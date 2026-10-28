@@ -3,8 +3,10 @@
 The reference project (PLINNG, a production multi-agent platform) is the baseline for this playbook, but it is
 not finished. This chapter lists the practices
 the playbook recommends that the reference project has not yet adopted, checked against its repository (at the commit this playbook was cut
-from) and against the external sources (`SOURCES.md`). Ordered by value versus effort. None of them is applied yet: each would be its
-own OpenSpec change. If you are adopting the playbook from scratch, you can start with several of these directly.
+from) and against the external sources (`SOURCES.md`). Ordered by value versus effort. Each would be its own OpenSpec
+change in the reference project. Items marked **shipped** now have a mechanism in this repository (template,
+reference script and docs test), so an adopter gets them directly; the reference project still has to adopt them.
+If you are adopting the playbook from scratch, you can start with several of these directly.
 
 ## High priority (low effort, high value)
 
@@ -36,8 +38,11 @@ own OpenSpec change. If you are adopting the playbook from scratch, you can star
 9. **A written flaky-test policy** in `quality.md`: quarantine with a ticket and an expiry date, counted in the
    audit (chapter 04). In the reference project the only written rule today is the single tolerated infrastructure
    signature (the lost-RPC message of the test runner under load).
-10. **File size as a soft gate.** The reference project only measures it; measuring is not enough. Add a test that fails on **new** files over 500 lines
-    (existing ones go in an allowlist that only shrinks).
+10. **File size as a soft gate.** **Shipped in 0.3.0** as the `fileSize` ratchet (chapter 07, Ratchets): new
+    files over 500 lines fail `verify`, existing ones are exceptions that only shrink, and `land` tightens them.
+    The same file ratchets the coverage gap (a floor more than one point under measured fails) and the lint warning
+    budget. The reference project only measured them, and between two audits all three drifted with every gate
+    green.
 11. **Formatter.** In the reference project the formatter is off so it does not rewrite the whole codebase at once; turn it on for a growing list of
     folders, or format only changed files in a `PostToolUse` hook.
 12. **ADR headings.** Numbered ADRs can keep a stale `# ADR-draft —` title; the numbering script already rewrites
@@ -58,6 +63,16 @@ own OpenSpec change. If you are adopting the playbook from scratch, you can star
     attempt: build a panel with land p50, % conflict-free, retries and cost per landed change.
 18. **A data policy for second opinions** from other models: deciding it unblocks cross-model review on sensitive
     paths. Until it exists, cross-model review stays blocked.
+
+## Added from the 2026-10 audits (rules that eroded without a mechanism)
+
+19. **Every rule names its mechanism.** **Shipped in 0.3.0:** each rule in `templates/CLAUDE.md` ends with
+    `(enforced: <path>)` or `(preference)`, the docs test checks the markers and that every enforced path exists,
+    and the audit counts the preferences and names the rules it finds eroding.
+20. **Detection latency.** **Shipped in 0.3.0:** every audit finding records the commit that introduced it, the
+    audit that detected it and whether a per-change review with `checklists/defect-classes.md` would have caught
+    it; the audit report tracks the median latency and the escape rate (the `audit-repo` skill and
+    `reference/scripts/audit.ts --findings`).
 
 ## What we do not recommend (yet)
 

@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: tdd-test-before-fix
+context:
+  scaffold_script: fixture.sh

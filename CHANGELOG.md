@@ -3,6 +3,89 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-10-28
+
+The theme of this release: every rule the protocol states now has a mechanism, the mechanisms are tested, and a
+project can prove that another team could absorb it.
+
+### Added
+
+- **Quality ratchets.** `reference/scripts/ratchets.ts` and `templates/quality-ratchets.json` turn "only goes down"
+  rules into checks: no new file over 500 lines and oversized files only shrink; the coverage floor is neither above the
+  measured value nor more than `maxGap` below it ("raise the floor to X"); a lint warning budget, total and per rule
+  (Biome or ESLint JSON). The full `verify` runs them after the tests and `--quick` checks file size on changed files.
+  After a green verify, `land` tightens the file and commits it alone (`chore: tighten quality ratchets`) on top of the
+  verified SHA, aborting if that commit touches anything else. Conformance check L1.6, optional `commands.ratchets`,
+  and a guarantee row in `INTEGRATION.md` §2. Manual chapter 07 gains a "Ratchets" section.
+- **Every rule names its mechanism.** Each rule in `templates/CLAUDE.md` ends with `(enforced: <path>)` or
+  `(preference)` (33 rules, 14 preferences). The docs-test templates fail on a rule without a marker or an enforced
+  path that does not exist. Conformance check L0.6.
+- **Review as a gate (L2.7).** `checklists/defect-classes.md` lists 46 defect classes (`DC-<area>-<nn>`) distilled
+  from about 60 findings of two whole-repo audits: symptom in a diff, why it hurts, how to detect it, the fix, and
+  whether a diff review can catch it or it needs a whole-repo audit. `reviewer`, `security-reviewer` and
+  `test-auditor` check every diff against the diff-catchable classes and cite DC ids; `reviewer` also walks the
+  project's invariants table row by row; `quality-auditor` uses the whole catalog and flags findings that slipped past
+  review; `builder` self-checks before claiming done. The `review` skill writes a receipt at
+  `<git-common-dir>/swarm-reviews/<patch_id>.json`, keyed by `git patch-id --stable` over `<integration>...HEAD`, and
+  `land` refuses a change that `review.mode` covers unless that receipt says `pass` with `open_high: 0`. The `review`
+  block of `swarm.json` (`mode`: `always` | `sensitive` | `off`, plus `sensitive` globs) is read from the integration
+  branch, so a branch cannot relax its own gate. `land --no-review "<reason>"` is the logged escape hatch.
+  `reference/scripts/review-receipt.ts` (`write`, `check`) plus self-tests.
+- **Detection latency.** Audit findings record `introduced` (from `git log -S`, `git blame` or `git log -L`, or
+  "unknown"), `detected` and `catchable_at_review` against the defect catalog. The audit report gains "Detection"
+  (median latency, escape rate, trend) and "Rules and mechanisms" (preference count, eroding rules) sections;
+  `audit.ts --write --findings <json>` stores them in the snapshot.
+- **Self-tests for the reference implementation.** `reference/self-test/` runs `land`, `wt`, `verify`, `adr`,
+  `ratchets`, `review-receipt` and `audit` end to end against throw-away git repos (a bare remote, a publisher clone
+  with the real `pre-push` hook, a linked worktree) with `node:test` and no dependencies: 57 tests, in a new CI
+  `self-test` job on Node 24. They include a regression test for the 0.2.0 land fix (a commit or edit made while
+  verify runs never reaches the integration branch; the Stop hook stays silent during a live land) and the race
+  where the integration branch moves during verify (land rebases and verifies again).
+  `DEV_FLOW_CONFIG=<json>` deep-merges over `dev-flow.config.ts` so the tests (and adopters) can override it.
+- **Skill evals.** `evals/` holds 58 cases for `claude plugin eval`: trigger cases (4 positive, 2 negative) for the
+  nine core skills and behaviour cases for `verify` (green evidence, red is not done), `review` (dispatches the
+  reviewer and security-reviewer on an auth diff) and `tdd` (test written before the fix). `scripts/check-evals.mjs`
+  is the free structural check CI runs; a manual `evals` workflow runs the real suite only when an `ANTHROPIC_API_KEY`
+  secret exists, with a cost ceiling.
+- **Transferability (manual chapter 18, conformance track X1–X5).** Five checks, separate from the levels, that turn
+  "another team can absorb this project" into something a command reports: X1 fresh clone (one `commands.setup` from
+  a clean clone to a green `verify`, run weekly by `templates/github/workflows/fresh-clone.yml`), X2 new-agent test
+  (an agent with no prior context does the reference task on a throwaway branch with turn and budget caps, judged
+  deterministically, `templates/github/workflows/new-agent-test.yml`), X3 explicit ownership (`templates/CODEOWNERS`,
+  `templates/docs/runbook.md`, `templates/docs/dependencies.md`), X4 no hidden knowledge (counted by the audit),
+  X5 handover checklist (`checklists/handover.md`, with a joint session where the receiving team's agent does the
+  reference task live). `/swarm:adopt --check transfer` runs them. New `commands.setup` key and guarantee.
+- **Skill `learn`.** Turns an incident or a review finding into a durable rule with a mechanism (test, hook, ratchet,
+  check) or an explicit `preference` label, written as a change or ADR draft; drafts an issue or PR for this
+  repository when the lesson is generic, and never sends it without explicit confirmation.
+- **`MAINTAINING.md`.** Running the protocol inside a company: single source of truth, playbook owner, two approvals
+  for gate changes, the semver table, release checklist, update commands and managed-settings pinning, the
+  incident → learn → PR loop, protocol score and detection latency per team, pilot before rollout.
+
+### Changed
+
+- `/swarm:adopt --check` compares the project's `swarm.json` `version` with the plugin's and reports drift with a link
+  to this changelog.
+- `templates/swarm.json` and the `INTEGRATION.md` §1 example carry `commands.setup`, `commands.ratchets` and the
+  `review` block; `version` is `0.3.0`.
+- The adopted path of the reference tooling is `scripts/dev/` everywhere (`swarm.json`, hooks, `templates/CLAUDE.md`,
+  settings, CODEOWNERS, review globs); `reference/README.md` said `scripts/` and now says `scripts/dev/`.
+- `reference/README.md` warns that `verify.logDir` must be gitignored before the first land.
+- Manual chapter 14 marks file-size gates, rule mechanisms and detection latency as shipped.
+
+### Fixed
+
+- `land` crashed (`ENOENT … docs/adr`) in a repository without an ADR folder; the ADR numbering and index are now
+  no-ops there.
+- `audit.ts` counted the playground and its own regex source in the `any`, `@ts-ignore`, TODO and big-file metrics
+  (AUD-metricas-ruido); it now excludes them and counts lines the same way as the file-size ratchet.
+
+### Decided against
+
+- Splitting the plugin into `core` and `governance` plugins. Claude Code installs a plugin by copying only its own
+  directory, and the skills read the manual, templates and reference code through `${CLAUDE_SKILL_DIR}/../../`; a
+  split would ship them without that knowledge or duplicate ~400 KB. Recorded in `MAINTAINING.md` §1.
+
 ## [0.2.0] — 2026-10-28
 
 ### Fixed

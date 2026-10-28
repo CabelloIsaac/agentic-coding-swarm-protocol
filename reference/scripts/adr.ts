@@ -5,7 +5,7 @@
  *   node scripts/adr.ts index    regenerate the index
  *   node scripts/adr.ts number   number the drafts (land does it after the rebase)
  */
-import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './dev-flow.config.ts';
 import { git } from './git.ts';
@@ -42,9 +42,10 @@ export function adrIndexBlock(adrs: AdrEntry[]): string {
   return [START, '| ADR | Title | Status |', '|---|---|---|', ...rows, END].join('\n');
 }
 
-/** Replaces the generated index block. Returns `true` if the file changed. */
+/** Replaces the generated index block. Returns `true` if the file changed; a project without an ADR index is left alone. */
 export function updateAdrIndex(root: string): boolean {
   const file = join(root, ADR_DIR, 'README.md');
+  if (!existsSync(file)) return false;
   const text = readFileSync(file, 'utf8');
   const start = text.indexOf(START);
   const end = text.indexOf(END);
@@ -66,6 +67,8 @@ export interface Renumbered {
  * `draft-<slug>.md` → `00NN-<slug>.md`) in the versioned text files.
  */
 export function numberDraftAdrs(root: string): Renumbered[] {
+  // `land` calls this on every run: a project (or a branch) without ADRs must still land
+  if (!existsSync(join(root, ADR_DIR))) return [];
   const files = readdirSync(join(root, ADR_DIR));
   const drafts = files.filter((f) => DRAFT.test(f)).sort();
   if (drafts.length === 0) return [];

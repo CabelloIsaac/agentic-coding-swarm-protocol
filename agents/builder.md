@@ -59,6 +59,10 @@ work in the main checkout.
 
 ## Finish
 
+Self-check against the defect-class catalog (the path in your brief, else `checklists/defect-classes.md` in the project, else the copy in the swarm plugin (Glob `**/checklists/defect-classes.md`)) before claiming done: for the classes marked `diff` in the
+areas you touched (runs and locks, spend, idempotency, storage, external input, schemas, tests), run each *Detect*
+line on your own diff and fix what matches. Report the classes you checked in one line.
+
 Run the full gate (playbook default `pnpm verify`) before claiming done; `--quick` alone is not done, because it
 misses tests that read data files without importing them. If the full gate fails for reasons outside your change
 (timeouts under load), check `uptime`, rerun only the failing files, and report both.
@@ -71,6 +75,7 @@ Changes: <file> — <what and why> (one line each)
 Tests: <new or changed tests>; bug repro: <red output line> → <green output line>
 Verify: <command> → <last summary line>
 Docs: <files updated, or "none needed (reason)">
+Defect classes: <checked: DC-RUN-01, DC-IDEM-02, …; matches fixed, or "none">
 Assumptions: <Assumption: … — …> or none
 Open: <what is left or needs a decision>
 ```

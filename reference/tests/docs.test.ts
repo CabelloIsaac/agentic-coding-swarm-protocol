@@ -52,6 +52,13 @@ const INVARIANTS = {
   notTested: {} as Record<string, string>,
   minDocumented: 1,
 };
+/**
+ * Rules name their mechanism: in `file`, every bullet under a `## ` heading (continuation lines included) ends with
+ * `(enforced: <path>, …)` or `(preference)`, and every enforced path exists (`path#fragment` checks the path). A rule
+ * no mechanism enforces erodes silently; marking it a preference at least makes that visible (the audit counts them).
+ * `exemptSections` are headings whose bullets are not rules (an index of links, say).
+ */
+const RULE_MARKERS = { file: 'CLAUDE.md', exemptSections: [] as string[] };
 /** Index files that must link every file of a folder. */
 const INDEXES = [
   { index: 'docs/README.md', folder: 'docs/extending', pattern: /\.md$/, linkPrefix: 'extending/' },
@@ -79,6 +86,38 @@ const DOCS = [...DOC_FOLDERS.flatMap(mdFiles), ...DOC_FILES.filter((f) => exists
 /** Text without fenced code blocks (examples are not real links). */
 const prose = (md: string) => md.replace(/```[\s\S]*?```/g, '');
 const ARCH = [...ARCH_FILES.map(read), ...ARCH_FOLDERS.flatMap(mdFiles).map(read)].join('\n');
+
+/** Bullets of a rules file with their section; indented continuation lines are joined to their bullet. */
+const ruleBullets = (text: string) => {
+  const bullets: { section: string; text: string }[] = [];
+  let section = '';
+  let current: { section: string; text: string } | undefined;
+  for (const line of prose(text).split('\n')) {
+    if (line.startsWith('## ')) {
+      section = line.slice(3).trim();
+      current = undefined;
+    } else if (/^[-*] /.test(line)) {
+      current = { section, text: line.slice(2).trim() };
+      bullets.push(current);
+    } else if (current && /^\s+\S/.test(line)) current.text += ` ${line.trim()}`;
+    else current = undefined;
+  }
+  return bullets.filter((b) => b.section && !RULE_MARKERS.exemptSections.includes(b.section));
+};
+const RULE_MARKER = /\((?:enforced: ([^()]+)|preference)\)$/;
+
+describe('docs: rules name their mechanism', () => {
+  const rules = existsSync(join(ROOT, RULE_MARKERS.file)) ? ruleBullets(read(RULE_MARKERS.file)) : [];
+
+  it(`every rule in ${RULE_MARKERS.file} ends with (enforced: <path>) or (preference)`, () => {
+    expect(rules.filter((r) => !RULE_MARKER.test(r.text)).map((r) => `${r.section} → ${r.text.slice(0, 80)}`)).toEqual([]);
+  });
+
+  it('every enforced: target exists', () => {
+    const targets = rules.flatMap((r) => (RULE_MARKER.exec(r.text)?.[1] ?? '').split(',').map((t) => t.trim().replace(/`/g, '').split('#')[0] ?? '').filter(Boolean));
+    expect(targets.filter((t) => !existsSync(join(ROOT, t)))).toEqual([]);
+  });
+});
 
 describe('docs: valid references', () => {
   it('relative links point to existing files', () => {

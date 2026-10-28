@@ -1,6 +1,7 @@
 # Audit file skeleton
 
-Write `openspec/audits/<YYYY-MM-DD>.md` with exactly these sections. Keep each finding to five lines.
+Write `openspec/audits/<YYYY-MM-DD>.md` with exactly these sections. Keep each finding to six lines: the sixth is
+its detection data, which also goes in `openspec/audits/<YYYY-MM-DD>.findings.json` for `{audit} --findings`.
 
 ```markdown
 # Audit <YYYY-MM-DD> · commit <sha7> · scope <full|diff|dimension>
@@ -21,6 +22,7 @@ run, how findings were verified (which highs you re-checked in the code), what w
 | end-to-end demo | ✓ 14/14 criteria |
 | seed and tracked storage clean | ✓ |
 | dependency audit | ✗ 1 critical (AUD-sec-deps) |
+| ratchets | ✓ size, coverage gap, lint budget within bounds |
 | memory | normal, swap 0 |
 
 ## Metrics
@@ -41,10 +43,34 @@ measurement itself (playground, the audit script's own patterns) say so and give
 - Resolved: AUD-… (<commit or change>)
 - Reopened: AUD-…
 
+## Detection
+
+| Measure | This audit | Previous | Trend |
+| --- | --- | --- | --- |
+| New findings | n | n | ↑/↓/= |
+| Median latency (introduced → detected), days | d (n of m with a known commit) | d | ↑/↓/= |
+| Escape rate (new findings catchable at review) | x % (k of n) | y % | ↑/↓/= |
+
+<Below the table: the escaped findings by defect class (`DC-…` from `checklists/defect-classes.md`) and the review
+that let each through; *diff* findings with no class, proposed as new classes. Latency falling and escape rate
+falling is the goal: defects caught in the change, not ten days later. The figures come from the metrics file
+(`{audit} --write --findings`).>
+
+## Rules and mechanisms
+
+`CLAUDE.md`: <n> rules · <e> `enforced:` · <p> `(preference)` (Δ vs previous) · <u> unmarked.
+
+| Rule (abbreviated) | Marker | Eroding how (finding or metric) | Proposed mechanism |
+| --- | --- | --- | --- |
+
+<A `preference` rule that eroded gets a mechanism proposed (ratchet, test, hook). An `enforced:` rule that eroded
+means its mechanism has a hole: that is a finding.>
+
 ## High
 
 ### AUD-<topic> · <dimension> · confirmed · new
 `file:line` · failure scenario · impact · fix
+introduced `<sha7>|unknown` · detected <YYYY-MM-DD> · catchable at review yes (DC-…)|no
 
 ## Medium
 
@@ -57,7 +83,7 @@ measurement itself (playground, the audit script's own patterns) say so and give
 | Id | Check | Result | Evidence |
 | --- | --- | --- | --- |
 
-Score: level 0 → n/5 · level 1 → n/5 · level 2 → n/6 · level 3 → n/5.
+Score: level 0 → n/6 · level 1 → n/6 · level 2 → n/7 · level 3 → n/5 (one per check id in INTEGRATION.md §6).
 What the project does beyond the protocol · what the protocol requires and the project lacks (and the change that
 covers it, if any) · defects shared with the reference implementation.
 

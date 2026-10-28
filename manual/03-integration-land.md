@@ -19,6 +19,10 @@ serially, always green, always fast-forward. Nobody merges by hand or resolves c
    - **Rebase** onto main. On conflict: list the files, `rebase --abort`, record `conflict` and fail. The branch is
      left as it was. **land never resolves conflicts.**
    - **Reinstall dependencies** if the rebase changed the lockfile blob.
+   - **Review gate.** If `review.mode` covers the change (`always`, or `sensitive` with a changed path matching
+     `review.sensitive`), require a passing review receipt for its patch id, or abort with "run /swarm:review (no
+     receipt for this change)". Before verify, so a missing review costs seconds, not a whole verify. See "Review
+     gate" below.
    - **Number draft ADRs** (`draft-<slug>` → `00NN-<slug>`), rewriting references across the repo, and regenerate
      the index; commit the result.
    - **Record the SHA** about to be verified (`verified = rev-parse HEAD`), then run the **full verification**
@@ -49,6 +53,7 @@ Final message: `✓ N commit(s) from <branch> on main (<sha>, published to origi
 | Number ADRs at integration | number collisions between branches (one forced renaming 10 files) |
 | Full verification inside the lock | integrating red; two branches green separately but red together |
 | Re-verify if main moved | a verification that was valid for a base that no longer exists |
+| Review receipt keyed by patch id | a sensitive change landing with no review, or with a review of an earlier version |
 | Fast-forward to the verified SHA, not the branch name | a commit created while verify ran (a Stop-hook `wip:`) landing unverified |
 | Stop hook idle while its branch lands | that same commit being created in the first place |
 | ff-only | integration merges, non-linear history, manual "fixes" |
@@ -65,6 +70,37 @@ has two halves, and both are needed: `land` records the SHA before verifying, re
 the tree changed, and fast-forwards that exact SHA; and the Stop hook does nothing while a live land lock belongs to
 its branch. General lesson: **between a check and the action it licenses, pin the object by identity (a hash), never
 by a name that can move.**
+
+## Review gate
+
+Review used to be a suggestion: the `reviewer` agent existed, and nothing required it. The two audits that fed
+[the defect classes](../checklists/defect-classes.md) found about 60 problems; many were visible in the diff that
+introduced them (a run opened outside its `try`, a budget check fed `0`, a dedupe marker written after the work, a
+`pass` with no evaluation), and they were found up to ten days later. `land` now enforces review the way it
+enforces verify.
+
+- **Receipt.** The `review` skill ends by writing `<git-common-dir>/swarm-reviews/<patch_id>.json` with
+  `{patch_id, base, head, reviewers, verdict, open_high, at}`. Local to the clone, shared by its worktrees, never
+  committed.
+- **Key.** `git patch-id --stable` over `git diff <integration>...HEAD`: a hash of the change, not of the commits. It
+  survives `--squash` and land's own rebase; any later edit changes it, so a receipt never covers unreviewed code.
+  It also changes if the integration branch edited the lines right next to your hunks; then review again.
+- **When it is required.** `swarm.json` → `review.mode`: `always` (every change), `sensitive` (the default: only when
+  a changed path matches `review.sensitive`: auth, payments, migrations, CI, quality gates, agent settings,
+  dependencies) or `off`. Land reads the block **from the integration branch**, so a branch cannot switch off its own
+  review, and `swarm.json` is itself a sensitive path.
+- **What passes.** A receipt for the current patch id with `verdict: "pass"` and `open_high: 0`. A missing receipt,
+  `changes_requested` or open High findings abort before verify, with the integration branch untouched.
+- **Where in the loop.** After the rebase (so the patch id is the rebased change) and before the ADR-numbering commit
+  (which would change the diff the reviewer saw).
+- **Escape hatch.** `land --no-review "<reason>"`. The reason is mandatory and written to the land log as
+  `review-bypassed`, where the daily review, which reads the land log, sees it. Use it for an emergency, a docs-only
+  change in `always` mode, or a change a person reviewed outside the tooling.
+
+A receipt is a statement, not a cryptographic proof: an agent can write one without a review. What it buys is that
+skipping review becomes a deliberate, logged act instead of a silent default, and that a review is bound to the
+exact change it saw. For a team that integrates through pull requests, the same rule is a required review on
+protected paths (`CODEOWNERS`) plus branch protection.
 
 ## Conflicts
 

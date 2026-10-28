@@ -32,6 +32,12 @@ const INDEXES = [
  * `notTested` maps ids enforced some other way to the reason. `digits` is the one canonical zero padding.
  */
 const INVARIANTS = { prefix: 'INV', digits: 2, testFiles: ['test/architecture.test.ts'], notTested: {} as Record<string, string> };
+/**
+ * Rules name their mechanism: in `file`, every bullet under a `## ` heading (continuation lines included) ends with
+ * `(enforced: <path>, …)` or `(preference)`, and every enforced path exists (`path#fragment` checks the path).
+ * `exemptSections` are headings whose bullets are not rules (an index of links, say).
+ */
+const RULE_MARKERS = { file: 'CLAUDE.md', exemptSections: [] as string[] };
 
 // ───────────────────────────── MECHANISMS ─────────────────────────────
 const read = (f: string) => readFileSync(join(ROOT, f), 'utf8');
@@ -54,6 +60,38 @@ const tableIds = () => [...new Set([...ARCH.matchAll(new RegExp(`\\| (${P}-\\d{$
 /** Ids a suite cites, including the `INV-06/07` shorthand for one test covering two invariants. */
 const testedIds = (f: string) =>
   [...read(f).matchAll(new RegExp(`${P}-(\\d{${D}})(?:/(\\d{${D}}))?(?!\\d)`, 'g'))].flatMap((m) => [`${P}-${m[1]}`, ...(m[2] ? [`${P}-${m[2]}`] : [])]);
+
+/** Bullets of a rules file with their section; indented continuation lines are joined to their bullet. */
+const ruleBullets = (text: string) => {
+  const bullets: { section: string; text: string }[] = [];
+  let section = '';
+  let current: { section: string; text: string } | undefined;
+  for (const line of prose(text).split('\n')) {
+    if (line.startsWith('## ')) {
+      section = line.slice(3).trim();
+      current = undefined;
+    } else if (/^[-*] /.test(line)) {
+      current = { section, text: line.slice(2).trim() };
+      bullets.push(current);
+    } else if (current && /^\s+\S/.test(line)) current.text += ` ${line.trim()}`;
+    else current = undefined;
+  }
+  return bullets.filter((b) => b.section && !RULE_MARKERS.exemptSections.includes(b.section));
+};
+const RULE_MARKER = /\((?:enforced: ([^()]+)|preference)\)$/;
+
+describe('rules name their mechanism', () => {
+  const rules = exists(RULE_MARKERS.file) ? ruleBullets(read(RULE_MARKERS.file)) : [];
+
+  it(`every rule in ${RULE_MARKERS.file} ends with (enforced: <path>) or (preference)`, () => {
+    expect(rules.filter((r) => !RULE_MARKER.test(r.text)).map((r) => `${r.section} → ${r.text.slice(0, 80)}`)).toEqual([]);
+  });
+
+  it('every enforced: target exists', () => {
+    const targets = rules.flatMap((r) => (RULE_MARKER.exec(r.text)?.[1] ?? '').split(',').map((t) => t.trim().replace(/`/g, '').split('#')[0] ?? '').filter(Boolean));
+    expect(targets.filter((t) => !exists(t))).toEqual([]);
+  });
+});
 
 describe('the documentation cites things that exist', () => {
   it('relative links resolve', () => {

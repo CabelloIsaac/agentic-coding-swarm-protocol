@@ -1,0 +1,71 @@
+name: evals
+# Skill evals call the model on every run, so they never run on push or pull_request: only by hand, and only when the
+# repository has an ANTHROPIC_API_KEY secret (forks and repos without one get a notice and a green no-op).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Cases to run (trigger, behavior, or a skill name such as verify)
+        default: trigger
+      runs:
+        description: Runs per case (the docs recommend 3 before trusting a change)
+        default: '1'
+      max_cost_usd:
+        description: Hard ceiling on the list-price estimate
+        default: '10'
+      model:
+        description: Model under test; pin a full model ID to compare runs over time (a rollout is not a plugin regression)
+        default: sonnet
+permissions:
+  contents: read
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Skip without an API key
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::No ANTHROPIC_API_KEY secret: evals skipped"; fi
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          node-version: 24
+      - name: Install Claude Code and the shell sandbox (behavior cases grant Bash)
+        if: steps.key.outputs.present == 'true'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap socat
+          npm install -g @anthropic-ai/claude-code
+      - name: Suite loads
+        if: steps.key.outputs.present == 'true'
+        run: node scripts/check-evals.mjs
+      - name: Run the eval suite
+        if: steps.key.outputs.present == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAG: ${{ inputs.tag }}
+          RUNS: ${{ inputs.runs }}
+          MAX_COST: ${{ inputs.max_cost_usd }}
+          MODEL: ${{ inputs.model }}
+        # Trigger cases have no meaningful no-plugin baseline (a plugin skill cannot fire without the plugin), so the
+        # suite runs one arm. Behavior cases need their fixture scripts and the tools named here, nothing wider.
+        run: |
+          claude plugin eval . --tag "$TAG" \
+            --trust-plugin --no-publish --ablation none \
+            --runs "$RUNS" --max-cost-usd "$MAX_COST" --model "$MODEL" --threshold 0.66 \
+            --scaffold \
+            --allow-tools Write Edit "Bash(node verify.mjs*)" "Bash(node --test*)" "Bash(git *)" "Bash(tail *)" "Bash(uptime)" \
+            --json evals/results/ci.json
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.key.outputs.present == 'true'
+        with:
+          name: eval-results
+          path: evals/results/
+          if-no-files-found: ignore

@@ -9,6 +9,7 @@ target repo. Merge every destination that already exists. The checks that prove 
 - Level 1 · one gate
 - Level 2 · worktrees, integration, structure
 - Level 3 · governance
+- Transferability track (X1–X5) · separate from the levels
 
 ## Level 0 · manifest and agent memory
 
@@ -80,3 +81,29 @@ Only after levels 0–2 have run for about two weeks.
    send code to a model, so the user decides on budget and data policy.
 
 Evidence: `--check 3`.
+
+## Transferability track (X1–X5) · separate from the levels
+
+The T-checks (INTEGRATION.md § "Transferability (X1–X5)", manual chapter 18) prove that another team can absorb the
+project. They never change `level`, and a project needs all five before it is declared "absorbable". Start once
+level 1 is green (a working `verify`); apply them in this order, one session each if the repo is large.
+
+1. **X1 · fresh clone.** Write one `commands.setup` that meets INTEGRATION.md §2 (install, local config from
+   `.env.example` with non-secret defaults, seed). Prove it locally in a fresh clone (clone into a temp directory,
+   run setup, then verify), list the prerequisites in the README, then add
+   `${CLAUDE_SKILL_DIR}/../../templates/github/workflows/fresh-clone.yml` (adapt the runtime step).
+2. **X3 · ownership.** `${CLAUDE_SKILL_DIR}/../../templates/CODEOWNERS` → `.github/CODEOWNERS`;
+   `${CLAUDE_SKILL_DIR}/../../templates/docs/runbook.md` → `docs/runbook.md`;
+   `${CLAUDE_SKILL_DIR}/../../templates/docs/dependencies.md` → `docs/dependencies.md`. Pre-fill only what the repo
+   proves (CI schedules, env vars in `.env.example`, SDKs and hosts in code); every owner, payer, rollback and alert
+   is a question for the user, never a guess.
+3. **X4 · no hidden knowledge.** Add the hidden-knowledge counts (chapter 18 §d) to the audit metrics
+   (`commands.audit`) and run the `audit-repo` skill once as the baseline.
+4. **X2 · new-agent test.** With the user, pick the reference task and write `docs/handover/reference-task.md` from
+   `${CLAUDE_SKILL_DIR}/../../templates/handover/reference-task.md`, with its acceptance command. **Ask first** before
+   adding `${CLAUDE_SKILL_DIR}/../../templates/github/workflows/new-agent-test.yml`: it spends money and sends code to
+   a model. Trigger it once by hand and turn every gap in its report into a docs fix.
+5. **X5 · handover checklist.** `${CLAUDE_SKILL_DIR}/../../checklists/handover.md` → `docs/handover/checklist.md`,
+   with the current owning team named.
+
+Evidence: the fresh-clone and new-agent runs (links or `gh run list` output); `--check transfer`.

@@ -1,0 +1,124 @@
+# New-agent test (manual chapter 18 §b, conformance check X2).
+# An agent with no prior context and only the repository does the reference task in
+# docs/handover/reference-task.md on a throwaway branch inside the runner. The workflow, not the agent, then runs
+# the acceptance command and verify. The output is a report artifact, never a merge.
+#
+# Requires the ANTHROPIC_API_KEY secret and, before that, an approved company data policy: it sends code to a model
+# and spends money (capped by --max-turns and --max-budget-usd). Without the secret the workflow skips itself.
+#
+# Security, as in weekly-review.yml: least privilege, read-only token, no persisted git credentials, the API key
+# only in the agent step, no write token anywhere, nothing is pushed. The agent's Bash is limited to git read/commit
+# commands and the project's own commands from swarm.json; network tools are denied.
+# Pin every action to a full commit SHA in your repo (and let Dependabot bump them); tags are mutable.
+name: new-agent-test
+on:
+  schedule:
+    - cron: "0 7 * * 1"   # Mondays 07:00 UTC
+  workflow_dispatch:
+permissions: {}
+env:
+  MAX_TURNS: "40"
+  MAX_BUDGET_USD: "5"
+  # Project commands the agent may run besides verify/verifyQuick (single-file tests, codegen…). Adapt.
+  EXTRA_ALLOWED_TOOLS: "Bash(pnpm vitest *),Bash(pnpm test *)"
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      enabled: ${{ steps.key.outputs.enabled }}
+    steps:
+      - id: key
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: echo "enabled=$HAS_KEY" >> "$GITHUB_OUTPUT"
+  new-agent:
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Throwaway branch and setup (what a new team member gets)
+        run: |
+          test -f docs/handover/reference-task.md || { echo "::error::docs/handover/reference-task.md is missing"; exit 1; }
+          git config user.name "new-agent-test"
+          git config user.email "new-agent-test@users.noreply.github.com"
+          git switch -c "new-agent-test/${GITHUB_RUN_ID}"
+          git rev-parse HEAD > "$RUNNER_TEMP/base.sha"
+          bash -c "$(jq -r '.commands.setup // empty' swarm.json)"
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Reference task (no prior context, only the repo)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          VERIFY="$(jq -r '.commands.verify // empty' swarm.json)"
+          QUICK="$(jq -r '.commands.verifyQuick // empty' swarm.json)"
+          TOOLS="Read,Grep,Glob,Edit,Write,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git add *),Bash(git commit *),Bash(ls *)"
+          [ -n "$VERIFY" ] && TOOLS="$TOOLS,Bash($VERIFY *),Bash($VERIFY)"
+          [ -n "$QUICK" ] && TOOLS="$TOOLS,Bash($QUICK *),Bash($QUICK)"
+          [ -n "$EXTRA_ALLOWED_TOOLS" ] && TOOLS="$TOOLS,$EXTRA_ALLOWED_TOOLS"
+          MEMORY=""
+          [ -f CLAUDE.md ] && MEMORY="$(cat CLAUDE.md)"
+          PROMPT="You are joining this project today with no prior context. Use only the files in this repository.
+          Read AGENTS.md or CLAUDE.md first and follow the session protocol in it, except that you are already on a
+          throwaway branch: do not create worktrees or branches, and never push.
+          Do the task in docs/handover/reference-task.md until its 'Done when' list holds, committing on the current
+          branch. Then write handover-report.md at the repo root with the four sections that file asks for. Be
+          honest about every gap and guess: the report matters more than the diff."
+          set +e
+          claude --bare -p "$PROMPT" \
+            --append-system-prompt "$MEMORY" \
+            --allowedTools "$TOOLS" \
+            --disallowedTools "Bash(git push *),Bash(git -c *),Bash(git config *),Bash(git remote *),Bash(curl *),Bash(wget *),WebFetch,WebSearch" \
+            --permission-mode dontAsk --max-turns "$MAX_TURNS" --max-budget-usd "$MAX_BUDGET_USD" \
+            --output-format json > "$RUNNER_TEMP/agent.json"
+          echo "$?" > "$RUNNER_TEMP/agent.exit"
+          exit 0
+      - name: Judge (deterministic, not the agent's claim)
+        run: |
+          mkdir -p report
+          cp "$RUNNER_TEMP/agent.json" report/agent.json || true
+          [ -f handover-report.md ] && cp handover-report.md report/handover-report.md
+          BASE="$(cat "$RUNNER_TEMP/base.sha")"
+          git log --oneline "$BASE..HEAD" > report/commits.txt
+          git diff "$BASE" > report/agent.diff
+          ACCEPT="$(sed -n 's/^<!-- acceptance: \(.*\) -->$/\1/p' docs/handover/reference-task.md | head -1)"
+          set +e
+          if [ -n "$ACCEPT" ]; then bash -c "$ACCEPT" > report/acceptance.log 2>&1; ACC=$?; else ACC=missing; fi
+          bash -c "$(jq -r '.commands.verify' swarm.json)" > report/verify.log 2>&1; VER=$?
+          COMMITS=$(wc -l < report/commits.txt | tr -d ' ')
+          DIRTY=$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')
+          VERDICT=fail
+          [ "$ACC" = "0" ] && [ "$VER" = "0" ] && [ "$COMMITS" -gt 0 ] && [ "$DIRTY" = "0" ] && [ -f report/handover-report.md ] && VERDICT=pass
+          {
+            echo "# New-agent test · $(date -u +%F) · $(git rev-parse --short "$BASE")"
+            echo
+            echo "verdict: $VERDICT"
+            echo "acceptance: $ACC · verify: $VER · commits: $COMMITS · uncommitted tracked files: $DIRTY · agent exit: $(cat "$RUNNER_TEMP/agent.exit")"
+            echo "agent report: $([ -f report/handover-report.md ] && echo present || echo missing)"
+            echo
+            echo "A fail means the project depends on knowledge that is in nobody's files. Turn every gap in"
+            echo "handover-report.md into a docs fix before the next run."
+          } > report/summary.md
+          cat report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "$VERDICT" > report/verdict.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: new-agent-test-${{ github.run_id }}
+          path: report/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Fail the run on a failed verdict
+        run: test "$(cat report/verdict.txt)" = pass

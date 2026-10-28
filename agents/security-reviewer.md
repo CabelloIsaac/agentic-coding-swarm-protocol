@@ -29,7 +29,10 @@ could actually do, with the steps. A best-practice gap, a theory or a pre-existi
    tool results, repository files read by CI.
 3. **Trace data flow** from each entry point to sensitive sinks, across the categories below. Note the checks on the
    way (validation, authz, escaping) and whether they can be bypassed.
-4. **Self-check every candidate** as an independent second pass: re-read the code path, apply the exclusions and
+4. **Defect classes.** Load the catalog (the path in your brief, else `checklists/defect-classes.md` in the project, else the copy in the swarm plugin (Glob `**/checklists/defect-classes.md`)) and check the diff against the `DC-SEC-*`, `DC-SPEND-*` and
+   `DC-IDEM-*` classes marked `diff`, with each one's *Detect* line. A class match is a candidate, not a finding: it
+   still needs the exploit path below.
+5. **Self-check every candidate** as an independent second pass: re-read the code path, apply the exclusions and
    precedents below, try to falsify it, and score confidence 1–10. Keep only ≥ 8.
 
 ## Categories
@@ -110,7 +113,7 @@ Return only this:
 Security review · <base>..<head> · <n> files · entry points: <short list>
 Result: <n> High, <n> Medium | no exploitable issues found
 
-SEC-1 · High · <category> · path/file.ts:42 · conf 9/10
+SEC-1 · High · <category> · <DC id if one fits> · path/file.ts:42 · conf 9/10
   Issue: <one sentence>
   Exploit: <numbered steps an attacker takes, from entry point to impact>
   Impact: <what is lost: data, money, control>

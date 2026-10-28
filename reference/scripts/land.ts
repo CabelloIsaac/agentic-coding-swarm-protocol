@@ -1,6 +1,6 @@
 /**
  * Integrates the worktree's branch into the integration branch: fetch → rebase → numbered ADRs and index → full
- * verification → fast-forward → push. One at a time (a lock in git's common directory) and never advancing the
+ * verification → tightened quality ratchets (a commit of that one file) → fast-forward → push. One at a time (a lock in git's common directory) and never advancing the
  * integration branch with anything red. It integrates exactly the commit it verified: the SHA is recorded right before
  * verify, and if the branch moved meanwhile (a Stop-hook `wip:` commit, a stray edit) it aborts instead of
  * fast-forwarding to a tip nobody verified. With a remote, it aborts if the remote integration branch has commits the
@@ -10,6 +10,11 @@
  *   pnpm land                     integrate the branch's commits and publish
  *   pnpm land --squash "<msg>"    squash the commits first (needed when intermediate wip commits remain)
  *   pnpm land --no-push           integrate locally only (no network); `wt setup` warns until it is published
+ *   pnpm land --no-review "<why>" skip the review gate; the reason is written to the land log
+ *
+ * Review gate (INTEGRATION.md L2.7): after the rebase and before the ADR commit and verify, a change the review mode
+ * covers (`always`, or `sensitive` with a sensitive path changed) needs a passing receipt for its patch id
+ * (`review-receipt.ts`), or land aborts before spending minutes on verify.
  *
  * `<ENV_PREFIX>LAND_VERIFY="<command>"` replaces the verification (only for this script's own tests).
  * If the rebase changes the lockfile, dependencies are reinstalled before verifying (otherwise verify fails with
@@ -39,6 +44,8 @@ import {
   tryLandLock,
   worktrees,
 } from './git.ts';
+import { tightenFile } from './ratchets.ts';
+import { loadReviewConfig, reviewGate } from './review-receipt.ts';
 import { fetchRemote, foreignCommits, hasRemote, publish, REMOTE } from './remote.ts';
 import { verify } from './verify.ts';
 import { formatGc, gc } from './wt.ts';
@@ -66,6 +73,8 @@ export interface LandOptions {
   installCmd?: string;
   /** Integrate locally only: do not publish, and a failed fetch does not abort. */
   noPush?: boolean;
+  /** Skip the review gate; the reason is mandatory and goes to the land log. */
+  noReview?: string;
   log?: (line: string) => void;
 }
 
@@ -80,6 +89,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
   if (existsSync(join(root, '.env'))) throw new LandError('there is a .env in the worktree: real spending only happens from the main checkout. Delete it and retry');
   const dirty = dirtyPaths(root);
   if (dirty.length) throw new LandError(`${dirty.length} uncommitted change(s): pnpm wt:commit "<message>" and retry`);
+  if (opts.noReview !== undefined && !opts.noReview.trim()) throw new LandError('--no-review needs a reason: pnpm land --no-review "<why>"');
 
   prepareCommits(root, opts.squash);
   const commits = pendingSubjects(root).length;
@@ -91,6 +101,10 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
   try {
     const remote = hasRemote(root);
     if (remote) checkRemote(root, opts, log);
+    if (opts.noReview !== undefined) {
+      record(root, { branch, result: 'review-bypassed', reason: opts.noReview });
+      log(`review gate skipped (--no-review): ${opts.noReview}`);
+    }
     for (;;) {
       attempts++;
       if (attempts > MAX_ATTEMPTS) throw new LandError(`${INTEGRATION_BRANCH} moved ${MAX_ATTEMPTS} times during verification; run pnpm land again`);
@@ -98,6 +112,7 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
         log(`${config.lockfile} changed with the rebase: reinstalling dependencies…`);
         if (!runQuiet(root, opts.installCmd ?? config.installCommand)) throw new LandError(`dependency install failed after the rebase: ${INTEGRATION_BRANCH} was not touched`);
       }
+      if (opts.noReview === undefined) enforceReview(root, log);
       const docs = regenerateDocs(root);
       if (docs) log(docs);
       // The exact commit under verification: only this SHA may reach the integration branch
@@ -110,8 +125,9 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
         log(`${INTEGRATION_BRANCH} moved during verification: rebasing and verifying again`);
         continue;
       }
-      advanceIntegration(root, verified);
-      head = verified;
+      const landed = tightenRatchets(root, verified, log);
+      advanceIntegration(root, landed);
+      head = landed;
       break;
     }
     // Inside the lock, so it does not race the gc of another land or of a session start in the main checkout
@@ -193,6 +209,16 @@ function rebase(root: string): boolean {
   );
 }
 
+/**
+ * Review gate, on the rebased branch and before the ADR commit (which would change the patch id the reviewer saw).
+ * The mode comes from `swarm.json` on the integration branch, so a branch cannot switch off its own review.
+ */
+function enforceReview(root: string, log: (line: string) => void): void {
+  const gate = reviewGate(root, INTEGRATION_BRANCH, loadReviewConfig(root, INTEGRATION_BRANCH, config.review));
+  if (!gate.ok) throw new LandError(`${gate.message}: ${INTEGRATION_BRANCH} was not touched`);
+  if (gate.required) log(gate.message);
+}
+
 /** Draft ADRs numbered and the index regenerated, in a commit of their own. */
 function regenerateDocs(root: string): string | undefined {
   const renumbered = numberDraftAdrs(root);
@@ -202,6 +228,37 @@ function regenerateDocs(root: string): string | undefined {
   const what = renumbered.map((r) => `${r.from} → ${r.to}`).join(', ');
   git(root, 'commit', '-q', '-m', renumbered.length ? `docs: number ADRs (${what}) and regenerate the index` : 'docs: regenerate the ADR index');
   return renumbered.length ? `ADRs numbered: ${what}` : 'ADR index regenerated';
+}
+
+/**
+ * After a green verify, the quality ratchets move to what was just measured (same pattern as the ADR commit): the
+ * ratchets file is rewritten, only ever tightening, and committed on its own on top of the verified SHA. That commit
+ * is the one exception to "integrate exactly what was verified", and it is safe because it may contain only that
+ * file, whose values are the measurements of the verified tree; anything else aborts. Returns the SHA to integrate.
+ * A failure to measure (lint not installed, say) never blocks a verified land: the file is restored and land goes on.
+ */
+function tightenRatchets(root: string, verified: string, log: (line: string) => void): string {
+  const file = config.ratchets.file;
+  let changes: string[];
+  try {
+    changes = tightenFile(root, file);
+  } catch (e) {
+    tryGit(root, 'checkout', '--', file);
+    log(`ratchets: not tightened (${(e as Error).message}); the next land retries`);
+    return verified;
+  }
+  if (!changes.length) return verified;
+  const dirty = dirtyPaths(root);
+  if (dirty.length !== 1 || dirty[0] !== file) {
+    tryGit(root, 'checkout', '--', file);
+    throw new LandError(`tightening the ratchets changed more than ${file} (${dirty.join(', ')}): ${INTEGRATION_BRANCH} was not touched`);
+  }
+  git(root, 'add', '--', file);
+  git(root, 'commit', '-q', '-m', config.ratchets.commitMessage);
+  const tip = git(root, 'rev-parse', 'HEAD');
+  if (git(root, 'diff', '--name-only', verified, tip) !== file) throw new LandError(`the ratchets commit touches more than ${file}: ${INTEGRATION_BRANCH} was not touched`);
+  log(`ratchets tightened: ${changes.join('; ')}`);
+  return tip;
 }
 
 /**
@@ -270,10 +327,12 @@ function record(root: string, entry: Record<string, unknown>): void {
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const squashAt = args.indexOf('--squash');
+  const noReviewAt = args.indexOf('--no-review');
   try {
     const r = await land(process.cwd(), {
       squash: squashAt >= 0 ? (args[squashAt + 1] ?? '') : undefined,
       noPush: args.includes('--no-push'),
+      noReview: noReviewAt >= 0 ? (args[noReviewAt + 1] ?? '') : undefined,
       verifyCmd: process.env[landVerifyEnv],
     });
     const where = r.pushed ? `, published to ${REMOTE}` : r.pushed === false ? ', NOT published' : '';

@@ -1,0 +1,55 @@
+# Fresh-clone test (manual chapter 18 §a, conformance check X1).
+# From a clean clone on a clean runner, with no caches, the single documented setup command must install, seed and
+# leave the repo in a state where verify passes, without modifying tracked files.
+#
+# Read-only token, no persisted git credentials, no secrets: if setup needs a secret, the setup is wrong.
+# Caches are excluded on purpose: a cache is exactly where a missing setup step hides.
+# The runtime below is the only prerequisite the README may list; adapt it to your stack (INTEGRATION.md §4).
+# Pin every action to a full commit SHA in your repo (and let Dependabot bump them); tags are mutable.
+name: fresh-clone
+on:
+  schedule:
+    - cron: "0 5 * * 1"   # Mondays 05:00 UTC
+  workflow_dispatch:
+permissions: {}
+jobs:
+  fresh-clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No `cache:` input and no actions/cache step, on purpose.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Setup (commands.setup from swarm.json)
+        run: |
+          SETUP="$(jq -r '.commands.setup // empty' swarm.json)"
+          if [ -z "$SETUP" ]; then
+            echo "::error::swarm.json has no commands.setup (INTEGRATION.md §1)"
+            exit 1
+          fi
+          echo "setup: $SETUP"
+          bash -c "$SETUP"
+      - name: Verify (commands.verify from swarm.json)
+        run: |
+          VERIFY="$(jq -r '.commands.verify // empty' swarm.json)"
+          if [ -z "$VERIFY" ]; then
+            echo "::error::swarm.json has no commands.verify"
+            exit 1
+          fi
+          echo "verify: $VERIFY"
+          bash -c "$VERIFY"
+      - name: Setup and verify left tracked files untouched
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --short --untracked-files=no
+            echo "::error::setup or verify modified tracked files: generated output belongs in .gitignore or in the commit"
+            exit 1
+          fi

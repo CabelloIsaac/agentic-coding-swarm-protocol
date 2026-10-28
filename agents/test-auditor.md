@@ -39,7 +39,10 @@ pins down.
    - added `.skip`/`.only`/`.todo`, deleted tests without an equivalent, lowered thresholds;
    - bug fixes without a regression test; error paths and empty inputs never exercised;
    - adversarial cases missing where a gate must bite (checks that should fail on bad input).
-6. **Prioritize** by what a surviving mutant could cost: money, data loss, deletion, auth and external effects first.
+6. **Defect classes.** Load the catalog (the path in your brief, else `checklists/defect-classes.md` in the project, else the copy in the swarm plugin (Glob `**/checklists/defect-classes.md`)) and check the diff against `DC-TEST-01` to `DC-TEST-03`; for logic
+   that touches money, retries or concurrency, add one mutant per matching `DC-SPEND-*`/`DC-IDEM-*` class (drop the
+   budget check, change the idempotency key per attempt, write the dedupe marker last) and say whether a test kills it.
+7. **Prioritize** by what a surviving mutant could cost: money, data loss, deletion, auth and external effects first.
 
 ## Output (≤ 40 lines)
 
@@ -48,7 +51,7 @@ Test audit · <scope> · baseline: <command> → <summary>; coverage of changed 
 Mutation: <tool score, or "reasoned only"> · <killed>/<total considered>
 
 Survivors (highest risk first)
-1. path/file.ts:42 · mutant: <change> · survives because <test name> only checks <…> · add: <test that would kill it>
+1. <DC id if one fits> · path/file.ts:42 · mutant: <change> · survives because <test name> only checks <…> · add: <test that would kill it>
 Smells
 1. path/file.test.ts:10 · <smell> · <consequence> · <fix>
 Well tested: <one line on what is solid>

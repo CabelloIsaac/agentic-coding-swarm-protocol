@@ -100,7 +100,8 @@ audit measures.
 
 Warnings per rule, `any`, `as unknown as`, `@ts-ignore`, `biome-ignore` (and those without a reason), files over 500
 lines, TODOs, environment variables missing from `.env.example`, secret patterns, draft ADRs, measured coverage vs
-the floor. **None of them rises without a written reason; when one reaches zero, its rule becomes an error.**
+the floor. **None of them rises without a written reason; when one reaches zero, its rule becomes an error.** The
+ones with a ratchet (file size, coverage gap, lint warnings; next section) cannot rise at all.
 
 `quality.md` keeps a dated **known-debt table** (debt / status / next step) as the starting snapshot; the current
 figures live in the latest audit report. The reference project's first snapshot: four files of 500–770 lines,
@@ -108,8 +109,56 @@ figures live in the latest audit report. The reference project's first snapshot:
 and 81.5 % branches. Each row says when it gets paid ("lower them when touching each file; at 0, make the rule an
 error"). The coverage HTML report is a CI artifact.
 
+## Ratchets
+
+**Rule:** a quality rule that no mechanism enforces erodes. Every number the team agreed should only improve lives
+in `quality-ratchets.json`, `verify` fails when it gets worse, and `land` moves it to the new best value.
+
+Why: between two audits of the reference project, ten days apart and with every gate green, lint warnings rose by
+90, files over 500 lines went from 9 to 15, the coverage floor sat 2.7 points below what was measured for 19 days,
+and a field the invariants require stayed optional in new schemas. Each of those rules was written down. None had a
+check, so each depended on someone noticing, and the audit noticed ten days late.
+
+**The file** (template: `templates/quality-ratchets.json`; script: `reference/scripts/ratchets.ts`, no
+dependencies):
+
+| Ratchet | Shape | Fails when | Tightened by `land` |
+| --- | --- | --- | --- |
+| `fileSize` | `{ max: 500, include, exclude, exceptions: { "<path>": <lines> } }` | a file in scope is over `max` and is not an exception; an exception grew past its recorded size | exceptions shrink to the current size; an exception at or under `max`, or deleted, is removed |
+| `coverage` | `{ summary, floor: { lines, statements, functions, branches }, maxGap: 1 }` | measured is below the floor; measured is more than `maxGap` above it ("raise the floor to X") | each floor rises to measured − `maxGap`/2, rounded down to one decimal |
+| `lintWarnings` | `{ command, budget, perRule? }` | the warnings counted from the linter's JSON (Biome or ESLint shape) exceed `budget` or a rule's budget | `budget` and each `perRule` entry fall to the current count |
+
+- **Only tighten.** `--tighten` never adds an exception, lowers a floor or raises a budget. Loosening is a hand
+  edit of a gate file, which the quality-gate hook flags and review must justify.
+- **Start from today's state.** Copy the template, adapt `include` and the lint command (Biome needs
+  `--max-diagnostics=10000`, or it truncates the list), and run `node scripts/dev/ratchets.ts --init` before the
+  first commit: every oversized file becomes an exception at its current size, the floor goes just under what is
+  measured and the budget equals today's warnings. Once the file is committed, `--init` refuses.
+- **Where the coverage floor lives.** Two options, pick one source. (a) In `quality-ratchets.json`, and the test
+  runner reads it (`thresholds: JSON.parse(readFileSync('quality-ratchets.json', 'utf8')).coverage.floor`); `land`
+  raises it automatically. (b) In `vitest.config.ts` as today: replace `floor` with `"floorFrom": "vitest.config.ts"`
+  and the ratchet reads the thresholds from there. The gap check still fails with "raise the floor to X", but
+  nothing rewrites the config: you raise it in the same change. Option (a) is the one that cannot drift.
+- **In `verify`.** The full tier runs the ratchets as the last serial step, after the tests, because the coverage
+  check reads the summary the test step writes (`json-summary` reporter). The quick tier checks only `fileSize`,
+  only on the changed files, in milliseconds.
+- **In `land`.** After a green verify, `land` runs `--tighten` and, if the file changed, commits it on its own
+  ("chore: tighten quality ratchets") on top of the verified SHA, the same pattern as the ADR numbering commit.
+  **Only that file may change:** `land` checks that the commit touches nothing else and aborts otherwise. That
+  commit is the one exception to "integrate exactly what was verified", and it is safe because its values are the
+  measurements of the verified tree. A failure to measure (a missing linter) never blocks a verified land: the
+  file is restored and the next land retries.
+- **Other stacks.** The same three numbers exist everywhere: file length, a coverage report (`coverage.py json`,
+  `go tool cover`, `llvm-cov`, JaCoCo) and a linter with a JSON reporter. Port the script or keep the file format
+  and write the check in your stack.
+
+Each rule in `CLAUDE.md` says how it is held: `(enforced: <path>)` or `(preference)`, checked by the docs test (see
+`templates/CLAUDE.md`). Ratchets turn the "only goes down" preferences of this chapter into `enforced:` rules; the
+audit counts the preferences that remain and names the ones it finds eroding.
+
 ## What to copy into your repo
 
 The strict `tsconfig` and the Biome configuration of the reference implementation described in
 `reference/README.md` (adapt the paths), the exception table with reasons, and the suppression-with-reason rule;
-both tables are in `templates/docs/quality.md`.
+both tables are in `templates/docs/quality.md`. Then `templates/quality-ratchets.json` with
+`reference/scripts/ratchets.ts`, initialized from your repo's current state.

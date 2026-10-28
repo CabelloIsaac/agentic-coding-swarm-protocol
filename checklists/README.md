@@ -86,6 +86,11 @@ Short on purpose. One per key moment.
 - [ ] If it touches an invariant: row in the table and test in the same change.
 - [ ] The ADR it supersedes: only its Status line.
 
+## Handing a project to another team
+
+- [ ] Follow [handover.md](handover.md) (chapter 18): T-checks green, access and money moved, joint session with the
+      receiving team's agent doing the reference task live, every question turned into a docs fix.
+
 ## Closing the session
 
 - [ ] Work integrated, or committed with its status in the change (`tasks.md`) or a `/checkpoint`.

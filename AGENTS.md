@@ -25,16 +25,19 @@ contract behind that file is [INTEGRATION.md](INTEGRATION.md).
 | Integrating a finished branch | [skills/land/SKILL.md](skills/land/SKILL.md) | — |
 | Recording a contract, invariant or formula decision | [skills/new-adr/SKILL.md](skills/new-adr/SKILL.md) | — |
 | Getting a finished branch reviewed | [skills/review/SKILL.md](skills/review/SKILL.md), which dispatches the agents below | — |
-| Reviewing a diff | [agents/reviewer.md](agents/reviewer.md), plus [agents/security-reviewer.md](agents/security-reviewer.md) on sensitive paths | — |
+| Reviewing a diff | [agents/reviewer.md](agents/reviewer.md), plus [agents/security-reviewer.md](agents/security-reviewer.md) on sensitive paths; both cite [checklists/defect-classes.md](checklists/defect-classes.md) | — |
 | Checking whether tests really prove a change | [agents/test-auditor.md](agents/test-auditor.md) | — |
 | Finding the root cause of a failure | [skills/debug/SKILL.md](skills/debug/SKILL.md); it delegates to [agents/debugger.md](agents/debugger.md) and escalates to [agents/architect.md](agents/architect.md) after two failed fixes | — |
 | Implementing a decided plan | [agents/builder.md](agents/builder.md) | the manual |
 | Bringing docs back in sync with a change | [agents/docs-keeper.md](agents/docs-keeper.md) | — |
 | Running a scheduled review | [agents/quality-auditor.md](agents/quality-auditor.md), [templates/review/](templates/review/) | — |
 | Running the biweekly audit | [skills/audit-repo/SKILL.md](skills/audit-repo/SKILL.md) | — |
+| Turning an incident or a review finding into a durable rule | [skills/learn/SKILL.md](skills/learn/SKILL.md) | — |
+| Handing a project to another team, or checking it could be | [checklists/handover.md](checklists/handover.md), `/swarm:adopt --check transfer`, [manual/18-transferability-and-handover.md](manual/18-transferability-and-handover.md) | — |
+| Running the protocol inside a company: owner, releases, updates, measurement | [MAINTAINING.md](MAINTAINING.md) | — |
 | Designing or reviewing a product whose core is an LLM agent | [manual/17-agentic-system-architecture.md](manual/17-agentic-system-architecture.md) | chapters 01–04 |
 | Implementing `verify`, `land` or the worktree tooling | [reference/README.md](reference/README.md) | — |
-| Improving this playbook | this file, [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md) and the chapter you change | — |
+| Improving this playbook | this file, [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md) (self-tests and evals) and the chapter you change | — |
 
 ## Contract of this repository
 
