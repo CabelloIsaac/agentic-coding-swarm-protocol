@@ -39,7 +39,8 @@ happens there (example: `templates/claude/rules/storage.md`).
 | `WorktreeCreate` | — | install deps when the worktree is created |
 | `PreCompact` | automatic checkpoint (context policy) | save state before detail is lost |
 
-Principles: a session hook **never blocks** (it exits 0 even on failure); `exit 2` only for zero-exception rules;
+Principles: a session hook **never blocks** (it exits 0 even on failure); `exit 2` only for zero-exception rules
+(the plugin's gate hook can deny or ask for an edit of a quality gate with `hooks.gateEdit`, INTEGRATION.md §3);
 `onFailure: "block"` for security hooks (so a hook failure also blocks); keep the set small (if you reach forty,
 most were preferences). `prompt`/`agent` hooks are decided by another model: they are not deterministic and cannot
 enforce anything. Plugin hooks: `hooks/hooks.json`.

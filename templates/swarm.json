@@ -17,7 +17,8 @@
   },
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup",
-    "stop": "node scripts/dev/wt.ts wip"
+    "stop": "node scripts/dev/wt.ts wip",
+    "gateEdit": "warn"
   },
   "findings": {
     "file": "docs/audits/findings.jsonl",

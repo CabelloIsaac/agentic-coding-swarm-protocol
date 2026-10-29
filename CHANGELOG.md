@@ -12,6 +12,12 @@ All notable changes to this project are documented here. The format follows
   released `CHANGELOG.md` entry, the `README.md` Status line or the `INTEGRATION.md` examples disagree. A project
   does not need to act.
 
+- **The gate hook can ask or block (`hooks.gateEdit`).** `swarm.json` accepts `hooks.gateEdit`: `warn` (default,
+  today's behavior), `ask` (the person approves the edit) or `block` (the edit is denied with its reason) when an
+  agent edits a quality-gate file. The hook answers with the `PreToolUse` permission decision and still exits 0.
+  Self-test: `scripts/swarm-hook.test.mjs`. A project does not need to act; set `ask` or `block` to stop gate edits
+  before `land` instead of at `land`.
+
 ### Changed
 
 - **Agents and evals pin full model IDs.** `agents/*.md` use `claude-opus-5-5` or `claude-sonnet-5-5` instead of the

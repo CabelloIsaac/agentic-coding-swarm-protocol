@@ -30,7 +30,8 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
   "findings": { "file": "docs/audits/findings.jsonl", "sla": { "high": 2, "medium": 14, "low": 60 }, "closureEvery": 3 },
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup",
-    "stop": "node scripts/dev/wt.ts wip"
+    "stop": "node scripts/dev/wt.ts wip",
+    "gateEdit": "warn"
   },
   "gates": ["*/vitest.config.*", "*/architecture.test.*", "*/docs.test.*", "*/scripts/dev/*"],
   "review": { "mode": "sensitive", "sensitive": ["**/auth/**", "**/migrations/**", ".github/**", "swarm.json"] }
@@ -57,6 +58,7 @@ after the conformance checks for that level pass (§6).
 | `findings` | level 2 (L2.8, L2.9) | `{ file, sla, closureEvery }`: the ledger path (default `docs/audits/findings.jsonl`), days to close by severity (defaults 2 / 14 / 60) and the closure quota N (default 3). `land` reads it from the integration branch. |
 | `roadmap` | level 3 (L3.6) | `{ maxActive, staleDays }`: active changes allowed at once (default 12) and days without a ticked task before a change counts as stale (default 14) unless its proposal carries `parked: <reason>`. The roadmap validator enforces both inside `verify`. |
 | `gates` | optional | Extra file globs whose edits trigger the quality-gate warning. |
+| `hooks.gateEdit` | optional | What the plugin's gate hook does when an agent edits a quality-gate file (§3): `warn` (default; a message, the edit goes ahead), `ask` (the person approves that one edit) or `block` (the edit is denied with the reason). Any other value means `warn`. |
 | `review.mode`, `review.sensitive` | optional (L2.7) | When `land` requires a review receipt: `always`, `sensitive` (default: only if a changed path matches a `sensitive` glob) or `off`. Read from the integration branch, so a branch cannot relax its own gate. Template default: `sensitive`, with globs for auth, payments, migrations, CI, quality gates and settings. |
 
 Missing keys fall back to the defaults in the template (Node and pnpm). A skill that uses a fallback says so in its
@@ -122,8 +124,13 @@ The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swa
 
 - **SessionStart** runs `hooks.sessionStart` from `swarm.json`.
 - **Stop** runs `hooks.stop`.
-- **PreToolUse (Edit/Write)** warns, without blocking, when a file matching a quality-gate glob is edited: the
-  defaults plus `gates` from `swarm.json`.
+- **PreToolUse (Edit/Write)** reacts when a file matching a quality-gate glob is edited (the defaults plus `gates`
+  from `swarm.json`), as `hooks.gateEdit` says. `warn`, the default, prints a message and lets the edit through, so
+  the gate is only stopped at `land` and review. `ask` and `block` answer with the `PreToolUse` permission decision
+  on stdout (`ask` or `deny`, with the reason) and still exit 0, so a broken hook never blocks a session. With
+  `block` an agent cannot edit `swarm.json` either: a person changes the mode by hand. In a non-interactive run
+  nobody answers `ask`; check what your harness does with it before relying on it there. The warning in
+  `templates/claude/settings.json` is independent of the plugin and only warns.
 
 In a repository without `swarm.json` the session hooks do nothing, so installing the plugin globally is safe, and a
 project that already wires its own SessionStart/Stop hooks in `.claude/settings.json` never gets them run twice. A

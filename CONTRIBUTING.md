@@ -62,7 +62,8 @@ people run them.
   that fails without it, like the `AUD-land-sha-no-fijado` regression in `land.test.ts`.
 - **Conformance checker:** `node --test 'scripts/*.test.mjs'` runs `scripts/check-conformance.mjs` (the mechanical half of
   `/swarm:adopt --check`) against throw-away repositories built from `templates/`; change a §6 check and its test together.
-  The same glob runs `scripts/check-version.mjs` (every place that states the version agrees with `plugin.json`).
+  The same glob runs `scripts/check-version.mjs` (every place that states the version agrees with `plugin.json`) and
+  the plugin's gate hook (`hooks/swarm-hook.sh gate`, in its `warn`, `ask` and `block` modes).
 - **Type-check** (optional, needs `typescript` and `@types/node`): `npx tsc --noEmit --allowImportingTsExtensions
   --module nodenext --target es2023 --strict --noUncheckedIndexedAccess --skipLibCheck --types node <files>`.
 

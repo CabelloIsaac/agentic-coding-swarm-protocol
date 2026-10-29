@@ -1,7 +1,8 @@
 #!/bin/sh
 # Swarm Protocol plugin hooks. Contract: INTEGRATION.md §3.
 # Usage: swarm-hook.sh session-start | stop | gate
-# A hook never blocks a session: every path exits 0.
+# A hook never blocks a session: every path exits 0. The gate hook may still deny or ask for one edit, through the
+# PreToolUse JSON decision on stdout, when swarm.json sets hooks.gateEdit to "block" or "ask" (default "warn").
 
 mode=$1
 root=${CLAUDE_PROJECT_DIR:-$(pwd)}
@@ -65,16 +66,32 @@ case "$mode" in
       [ -n "$extra" ] && patterns="$patterns
 $extra"
     fi
-    printf '%s\n' "$patterns" | while IFS= read -r p; do
+    matched=$(printf '%s\n' "$patterns" | while IFS= read -r p; do
       [ -z "$p" ] && continue
       # shellcheck disable=SC2254 # the pattern is a glob on purpose
       case "$file" in
         $p)
-          echo "swarm: you are touching a quality gate ($file). Justify it in the commit; never relax it to make something pass." >&2
+          echo "$p"
           break
           ;;
       esac
-    done
+    done)
+    [ -z "$matched" ] && exit 0
+    action=
+    [ -f "$manifest" ] && action=$(json .hooks.gateEdit "$manifest")
+    case "$action" in
+      block | ask)
+        # deny: the edit does not happen and the agent sees the reason; ask: the person confirms this one edit.
+        decision=ask
+        [ "$action" = block ] && decision=deny
+        esc=$(printf '%s' "$file" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        reason="swarm: $esc is a quality gate (hooks.gateEdit: $action in swarm.json). A person edits it, or approves the edit, and justifies it in the commit; never relax a gate to make something pass."
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"%s"}}\n' "$decision" "$reason"
+        ;;
+      *)
+        echo "swarm: you are touching a quality gate ($file). Justify it in the commit; never relax it to make something pass." >&2
+        ;;
+    esac
     ;;
 esac
 exit 0
