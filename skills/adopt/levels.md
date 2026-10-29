@@ -112,6 +112,9 @@ Depends on the scenario (chapter 16 §0):
 - **B, D, E (slow CI, PR teams, several machines):** `wt.ts` and `adr.ts`, but `land` in PR mode (rebase, quick
   gate, push the branch, PR with auto-merge; the merge queue runs the full gate and numbers ADRs). Branch
   protection instead of the publisher hook.
+  The merge queue, branch protection or rulesets and attestations depend on the code host's plan and on the
+  repository being public or private: verify against the project's plan before choosing B, D or E, and use the
+  fallbacks in manual chapter 16 §0 ("Verify against your plan") when a feature is missing.
 - **C (monorepo):** as A or D, with the quick gate per affected package and a `CLAUDE.md` per package.
 
 Then, in every scenario:

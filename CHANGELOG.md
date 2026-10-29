@@ -24,6 +24,12 @@ All notable changes to this project are documented here. The format follows
   of the `silentErrors` scanner, pip-audit over `uv export` as `deps.command`, the mutation smoke with pytest and
   mutmut for scheduled runs. Documentation only.
 
+- **"Verify against your plan" (manual chapter 16 §0).** Scenarios B, D and E depend on the merge queue, branch
+  protection or rulesets and, with provenance, artifact attestations, whose availability depends on the GitHub
+  plan and on the repository being private. The manual now says to check it and gives the fallback for each missing
+  feature (serial local `land` with a person merging the verified branch; local guards labelled as `preference`; no
+  provenance claims). `skills/adopt/levels.md` and `reference/README.md` point to it. Documentation only.
+
 ### Changed
 
 - **Agents and evals pin full model IDs.** `agents/*.md` use `claude-opus-5-5` or `claude-sonnet-5-5` instead of the

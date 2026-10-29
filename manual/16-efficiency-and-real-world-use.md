@@ -114,6 +114,23 @@ references.
 | **E. Several machines or cloud sessions** | worktrees, `verify`, plugin | no publisher `pre-push`: use branch protection. `.worktreeinclude` without secrets. Cloud sessions: declare the plugin in the project settings |
 | **F. Agents with no human in the loop (CI, scheduled)** | prompts from `templates/review/`, read-only agents | `claude --bare -p` with `--max-turns` and `--max-budget-usd`; output goes to a PR or a report, never a push to the integration branch. CI template: `templates/github/workflows/weekly-review.yml` |
 
+**Verify against your plan.** Scenarios B, D and E lean on server-side features of the code host: on GitHub, the
+merge queue, branch protection rules or rulesets (required checks, no force-push), and, if you add provenance,
+artifact attestations. Which of them a repository can use depends on the GitHub plan of its owner and on whether
+the repository is public or private, and that changes over time. Before you pick B, D or E for a private
+repository, check each feature's availability for your plan in GitHub's documentation (the "who can use this
+feature" note on each feature page). If a feature is missing:
+
+- **No merge queue:** keep local `land` serialized (lock, rebase, full `verify` on the exact SHA) and let it push the
+  verified branch; a person merges the PR without changing the commit (rebase or fast-forward merge, never a merge
+  that rewrites what was verified). The integration stays serial because one `land` runs at a time, not because
+  the server enforces it.
+- **No branch protection or rulesets:** the publisher `pre-push` guard and the `deny` rules on force-push in
+  `templates/claude/settings.json` are the only barriers, and both are local: `git push --no-verify` from a person
+  skips them. Say so in the project's `CLAUDE.md` with a `preference` marker, not `enforced`.
+- **No attestations:** record what was verified in the land log (each `landed` entry carries the integrated `head`) and do not claim
+  provenance you cannot produce.
+
 ### How an agent works in a project that already uses it
 
 1. It starts in its own worktree (`claude -w <task>`). The session hook installs dependencies, assigns ports and
