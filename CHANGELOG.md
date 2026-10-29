@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format follows
   Self-test: `scripts/swarm-hook.test.mjs`. A project does not need to act; set `ask` or `block` to stop gate edits
   before `land` instead of at `land`.
 
+- **Python, command by command (INTEGRATION.md §4).** A full mapping for Python projects that keep the Node
+  reference scripts: uv for setup and the lockfile, Ruff, pyright, pytest with pytest-cov and Hypothesis,
+  import-linter, the coverage.py → `coverage-summary.json` conversion the coverage ratchet reads, Ruff rules in place
+  of the `silentErrors` scanner, pip-audit over `uv export` as `deps.command`, the mutation smoke with pytest and
+  mutmut for scheduled runs. Documentation only.
+
 ### Changed
 
 - **Agents and evals pin full model IDs.** `agents/*.md` use `claude-opus-5-5` or `claude-sonnet-5-5` instead of the

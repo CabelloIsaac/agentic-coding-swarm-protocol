@@ -155,6 +155,35 @@ itself uses the stack's native tools:
 | JVM (Gradle) | Spotless or Checkstyle | the compiler | a Gradle task with a JSON Schema validator | `gradle check` with JaCoCo violation rules | `:<module>:test` for changed modules | ArchUnit |
 | Anything | `make lint` | `make typecheck` | `make validate` | `make test` | `make test-changed` | a test in the project's own test runner |
 
+### Python, command by command
+
+For a Python project that keeps the Node 24 reference scripts as dev tooling, this is the full mapping: the
+`swarm.json` commands, every step of the reference `verify` (`verify.full` and `verify.quick` in
+`reference/scripts/dev-flow.config.ts`, which `land` also runs), and the 0.4.0 ratchets, dependency gate and mutation
+smoke. Commands assume uv, Ruff, pyright, pytest with pytest-cov, import-linter, pip-audit, mutmut and Hypothesis as
+dev dependencies; check the flags against the versions you pin.
+
+| Concern | Reference (TypeScript) | Python |
+|---|---|---|
+| `commands.setup`, `installCommand`, `setupInstallCommand` | `pnpm install --frozen-lockfile` | `uv sync --locked` (fails when `uv.lock` is out of date) |
+| `lockfile`, `installMarker` (re-install after a rebase) | `pnpm-lock.yaml`, `node_modules/.modules.yaml` | `uv.lock`, `.venv/pyvenv.cfg` |
+| verify `lint` | `pnpm -s lint` | `uv run ruff check .` |
+| verify `format` | `pnpm -s biome format .` | `uv run ruff format --check .` |
+| verify `typecheck` | `pnpm -s typecheck` | `uv run pyright` (strict mode in `pyproject.toml`) or `uv run mypy` |
+| verify `validators` | `pnpm -s validate:registry` | `uv run python -m <package>.validate` with Pydantic models, or `uvx check-jsonschema --schemafile <schema> <files>` |
+| verify `tests + coverage` | `pnpm -s test:coverage` | `uv run pytest --cov=<package> --cov-branch --cov-report=json:coverage/coverage.json` (pytest-cov). Property tests use Hypothesis inside the same run; a CI settings profile with `derandomize=True` keeps the gate reproducible |
+| verify `ratchets`, coverage floor | reads `coverage/coverage-summary.json` (Istanbul `{ total: { lines: { pct } } }`) | coverage.py writes another shape: convert it after the tests, for example `jq '{total: {lines: {pct: (.totals.covered_lines * 100 / .totals.num_statements)}, branches: {pct: (if .totals.num_branches > 0 then .totals.covered_branches * 100 / .totals.num_branches else 100 end)}}}' coverage/coverage.json > coverage/coverage-summary.json`, and keep only `lines` and `branches` in `coverage.floor` (a metric the summary lacks is not judged) |
+| ratchets `fileSize` | `include` of `*.ts` globs | `"include": ["src/**/*.py"]`, `"exclude": ["tests/**", "**/test_*.py"]` |
+| ratchets `lintWarnings` | Biome or ESLint JSON with warnings | Ruff has no warning level (a rule passes or fails): drop the block, or point `command` at a wrapper that prints ESLint-shaped JSON for the rules you treat as warnings |
+| ratchets `silentErrors` | the TypeScript `catch` scanner | the scanner does not read Python: enable Ruff `S110` (`try`/`except`/`pass`), `S112` (`try`/`except`/`continue`) and `BLE001` (blind `except Exception`); put today's hits in `per-file-ignores` and let that list only shrink (`pyproject.toml` is then a `review.sensitive` path) |
+| verify `structural rules`, architecture | `pnpm -s test:arch` | `uv run lint-imports` (import-linter contracts in `pyproject.toml`) |
+| verify `mutation smoke` | `node scripts/dev/mutation-smoke.ts`, `mutation.command: "pnpm vitest run {files}"` | the same script: it already mutates `.py` (`True`/`False`, `and`/`or`, `==`) and finds `test_<name>.py`; set `mutation.command` to `"uv run pytest -q {files}"`. For real mutation testing, schedule `uv run mutmut run` outside `verify` |
+| verify `deps` (`deps-audit`) | `deps.command: "pnpm audit --prod --json"` | `deps.command: "uv export --frozen --no-dev --no-emit-project --format requirements-txt -o tmp/requirements.audit.txt && uvx pip-audit --disable-pip -r tmp/requirements.audit.txt -f json"` (the exported file carries hashes, which `--disable-pip` needs; `--no-emit-project` drops the unhashed `-e .` line). pip-audit reports no severity, so every advisory counts as `high` and fails unless `deps-allowlist.json` lists its `PYSEC-…`, `GHSA-…` or `CVE-…` id |
+| quick tier | `vitest run --changed`, Biome on changed files | `uv run ruff check <changed .py files>`, `uv run pytest --testmon` (pytest-testmon) or the tests under the changed paths |
+| `commands.verify`, `verifyQuick` | `pnpm verify`, `pnpm verify --quick` | `node scripts/dev/verify.ts`, `node scripts/dev/verify.ts --quick` with the steps above in `verify.full` and `verify.quick` |
+| `commands.land`, `commit`, `status`, `newAdr` | `pnpm land`, `pnpm wt:commit`, `pnpm wt:status` | `node scripts/dev/land.ts`, `node scripts/dev/wt.ts commit`, `node scripts/dev/wt.ts status`; unchanged, since `land` only runs git and the configured `verify` |
+| `commands.ratchets`, `commands.findings` | `node scripts/dev/ratchets.ts`, `node scripts/dev/findings.ts` | unchanged |
+
 Wrap the steps in one entry point (`make verify`, `just verify`, `tox -e verify`, a script) and put that in
 `commands.verify`. A bare `make verify: lint test` cannot meet the §2 guarantee (one line per step, the tail of each
 failure, logs on disk): a wrapper script is required. A pilot's shape was about 110 lines: run the steps, print one
