@@ -25,13 +25,16 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
     "newAdr": "docs/adr/draft-<slug>.md",
     "audit": "pnpm audit:repo",
     "ratchets": "node scripts/dev/ratchets.ts",
-    "findings": "node scripts/dev/findings.ts"
+    "findings": "node scripts/dev/findings.ts",
+    "leases": "node scripts/dev/leases.ts"
   },
   "findings": { "file": "docs/audits/findings.jsonl", "sla": { "high": 2, "medium": 14, "low": 60 }, "closureEvery": 3 },
   "hooks": {
-    "sessionStart": "node scripts/dev/wt.ts setup",
-    "stop": "node scripts/dev/wt.ts wip"
+    "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/leases.ts session",
+    "stop": "node scripts/dev/wt.ts wip; node scripts/dev/leases.ts renew --hook",
+    "preEdit": "node scripts/dev/leases.ts check"
   },
+  "leases": { "ttlMinutes": 30, "exclusive": ["**/migrations/**", "*.sql", "src/shared/types/**"] },
   "gates": ["*/vitest.config.*", "*/architecture.test.*", "*/docs.test.*", "*/scripts/dev/*"],
   "review": { "mode": "sensitive", "sensitive": ["**/auth/**", "**/migrations/**", ".github/**", "swarm.json"] }
 }
@@ -50,6 +53,8 @@ after the conformance checks for that level pass (§6).
 | `commands.verifyQuick` | level 1 | The fast, change-scoped gate. |
 | `commands.commit`, `commands.status`, `commands.land` | level 2 | Session commit, session overview, serialized integration (or PR creation in PR mode). |
 | `hooks.sessionStart`, `hooks.stop` | level 2 | Run by the plugin hooks (§3). Optional for teams whose agents have no hooks; then §5 applies. |
+| `hooks.preEdit` | optional (recommended from level 2) | Run by the plugin's `PreToolUse` hook before an Edit or Write, with the hook JSON on stdin. Its stdout goes back to Claude Code; its exit 2 refuses the edit (the only hook allowed to block, §3). The template runs `leases check`. |
+| `commands.leases`, `leases` | optional (recommended from level 2) | The leases CLI (default `node scripts/dev/leases.ts`) and `{ ttlMinutes, exclusive }`: minutes without a renewal before a lease is dead (default 30) and the exclusive zone globs. Read from the integration branch, so a branch cannot relax them. |
 | `commands.newAdr` | level 2 | A command, or a path pattern for draft ADRs. |
 | `commands.audit` | level 3 | Offline debt metrics. |
 | `commands.ratchets` | required from level 1 (L1.6) | Checks `quality-ratchets.json`; with `--tighten`, rewrites it to the current values, only tightening. Default `node scripts/dev/ratchets.ts`. |
@@ -105,8 +110,10 @@ The names are free; the behaviour is the contract. Every guarantee below is some
 | `ratchets` | Check `quality-ratchets.json`: no new file over the size limit and no exception above its recorded size; measured coverage neither below the floor nor more than `maxGap` above it; lint warnings within budget. Run last in the full `verify` (after the tests, which write the coverage summary); the quick tier checks file size on the changed files only. With `--tighten` (run by `land` after a green verify), move every value to the measured one in the tightening direction only; `land` commits the file alone on top of the verified SHA and aborts if that commit touches anything else. `check` also compares the file with the integration branch's copy (merge base) and fails on any loosening: new or larger exception, higher `max`, higher budget, lower floor, higher `maxGap`, narrower `include`; the file is a sensitive path of the review gate. | Loosen a value (add an exception, lower a floor, raise a budget), or change any other file. |
 | `deps-audit` | Run the stack's dependency audit as JSON (`deps.command`), normalise it, and exit 1 on any advisory at a `deps.failOn` severity (default critical, high) that `deps-allowlist.json` does not list with a reason, an owner and an unexpired date; an expired entry fails again; an advisory with no severity counts as high. Serial, last step of the full tier and a CI step. | Pass when the audit printed no JSON (network down counts as a failure, not a pass). |
 | `mutation-smoke` | For each changed source file with related tests, apply a few mutations (`>=`/`<=`, `===`, `&&`/`||`, early `return`) one at a time and run those tests; restore the original on every exit path. Report each file whose mutants all survive and each changed file with no related test as "not proven". `mode: warn` reports; `mode: fail` exits 1. | Leave a mutated file on disk; claim a red baseline as a kill. |
+| `leases` | Keep one lease per session branch that expires after `ttlMinutes` without a renewal or when its worktree is gone. `check`: take the exclusive zone that covers the edited file, or refuse with exit 2 and the holder when another live branch holds it; add the file to the lease; tell the agent once which other live leases cover it. `claim`, `renew`, `release` (also run by `land` after a green integration), `break --reason` (logged), `session`, `list`. | Block for any reason other than a zone held by another live branch; let an expired or orphaned lease hold anything; refuse with any exit code but 2. |
 | `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
 | `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout, during a rebase or merge, or while a `land` of its branch is running. |
+| `hooks.preEdit` | Exit 0 and print nothing or one `PreToolUse` JSON with `additionalContext`; exit 2 with the reason on stderr only for a deliberate refusal. | Exit 2 on its own errors. |
 
 **Domain contract validators are a first-class category of the gate**, next to lint, types and tests: the
 project's own data (tool or plugin registries, tenant configuration, specs, fixtures) checked against its schemas
@@ -118,12 +125,17 @@ in `reference/scripts/`.
 
 ## 3. Plugin hooks
 
-The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swarm-hook.sh), all exit 0 always:
+The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swarm-hook.sh), all exit 0 always but
+for one deliberate refusal:
 
 - **SessionStart** runs `hooks.sessionStart` from `swarm.json`.
 - **Stop** runs `hooks.stop`.
 - **PreToolUse (Edit/Write)** warns, without blocking, when a file matching a quality-gate glob is edited: the
-  defaults plus `gates` from `swarm.json`.
+  defaults plus `gates` from `swarm.json`. Then it runs `hooks.preEdit`, if present, with the hook JSON on stdin and
+  passes its stdout back; if that command exits 2, the hook exits 2 and Claude Code refuses the edit, showing the
+  command's stderr to the agent. Any other exit status is ignored. The template uses it for leases: an edit inside an
+  exclusive zone that another live session holds. Because the hook runs in the project root, the command finds the
+  session's worktree from `tool_input.file_path`.
 
 In a repository without `swarm.json` the session hooks do nothing, so installing the plugin globally is safe, and a
 project that already wires its own SessionStart/Stop hooks in `.claude/settings.json` never gets them run twice. A
@@ -162,7 +174,9 @@ through files: they read `AGENTS.md`, and the project's `AGENTS.md` (template:
 
 1. **Start:** work in a dedicated worktree and branch (`git worktree add ../<repo>-<task> -b <task>`), then run
    `hooks.sessionStart` yourself; if `hooks` is absent, run `commands.setup` (level 1 or above) or nothing.
-2. **Iterate:** `verifyQuick` after each meaningful change.
+2. **Iterate:** `verifyQuick` after each meaningful change. With `commands.leases`, run `claim <globs> --intent
+   "<why>"` before editing and `renew` before you stop: without hooks nothing does it for you, and an exclusive zone
+   is respected only if you check it (`list`).
 3. **Before stopping, every time:** commit (there is no `wip:` safety net without the Stop hook), with
    `Assumption: <what> — <why>` trailers for decisions taken without asking.
 4. **Finish:** full `verify`, an independent review (the prompts in `agents/` work as plain system prompts), then

@@ -59,6 +59,42 @@ branch is running (land integrates exactly the SHA it verified, so a commit duri
 branch, it uses `--amend`: there is at most **one** rolling wip commit. Nothing is lost if the session dies, and
 `land` refuses to integrate a stray `wip:` (use `wt:commit` or `land --squash "<message>"`).
 
+## Leases: reserving parts of the code (`leases`)
+
+A lease is a reservation with an expiry date: "this session is working on `src/billing/`; if it stops renewing, the
+reservation goes away on its own". A lock does not expire, and sessions die all the time (a closed laptop, an exhausted
+context, a killed process), so a lock held by a dead session blocks everyone until someone cleans it by hand. A lease
+does not: the `Stop` hook renews it every turn, and after `ttlMinutes` (default 30) without a renewal, or once its
+worktree is gone, it holds nothing.
+
+There are two kinds, and almost everything is the first:
+
+| | **Shared** (default) | **Exclusive** (only the zones in `leases.exclusive`) |
+| --- | --- | --- |
+| What it does | Informs. The first time a session touches a file another live lease covers, its agent is told who and why. | The first live session to edit or claim the zone holds it; an edit there by another branch is refused (`PreToolUse` exit 2). |
+| For | Everything | Contracts, schemas, migrations, shared types, CI: where one change invalidates the work of every other session |
+| Released by | Expiry, removed worktree, `land`, `leases.ts release` | The same, or a human: `leases.ts break <zone> --reason "<why>"` (logged) |
+
+Keep the exclusive list short: every entry serializes the sessions that need it, and a long one turns parallel work
+back into a queue. The list is read from `swarm.json` on the integration branch, like the review gate, so a branch
+cannot shrink it for itself.
+
+How a session uses it:
+
+1. **Start:** the `SessionStart` notice (`leases.ts session`) lists the exclusive zones, who holds them and the other
+   live leases. Once the agent has a plan, it may declare it: `leases.ts claim "src/billing/**" --intent "volume
+   discounts"`. Declaring is optional; it only makes the notice to others clearer and takes the zones early.
+2. **Every edit:** the `PreToolUse` hook (`leases.ts check`) adds the file to the branch's lease, takes the zone if the
+   file is in one, refuses the edit if another live session holds that zone, and tells the agent once when another
+   lease covers the file. A declared plan is a prediction; the hook watches what the session really touches.
+3. **Every turn:** the `Stop` hook renews the lease.
+4. **`land`:** releases the branch's lease and zones after a green integration, so whoever waited can start.
+
+A refused edit is not a failure to work around: the agent finishes what does not need the zone, or tells the human
+which branch holds it until when. Leases are a coordination aid, not a guarantee: they see only the worktrees of this
+clone, the hook sees Edit and Write but not a shell command that writes a file, and `land` with `verify` remains what
+keeps the integration branch green.
+
 ## Resource hygiene
 
 Each worktree is ~800 MB of `node_modules` and, with dev servers and vitest, several GB of RAM. Rules:
@@ -130,7 +166,8 @@ from the default branch and is cleaned up automatically if nothing changed. Usef
 
 ## What to copy into your repo
 
-`reference/scripts/wt.ts` (setup, wip, commit, gc, reap, status, archive) with `reference/scripts/procs.ts` (process
+`reference/scripts/wt.ts` (setup, wip, commit, gc, reap, status, archive) and `reference/scripts/leases.ts` (shared
+leases and exclusive zones, wired as `hooks.preEdit`, after `wt:setup` and after `wt:wip`) with `reference/scripts/procs.ts` (process
 ownership by `cwd`, group kills) and `reference/scripts/remote.ts` (divergence check); the `pre-push` hook in
 `templates/githooks/pre-push`; and the `SessionStart`/`Stop` hook wiring in `templates/claude/settings.json`. Keep
 the two non-negotiables: a session hook always exits 0, and nothing is deleted without a published archive tag.

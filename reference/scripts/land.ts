@@ -58,6 +58,7 @@ import {
 } from './git.ts';
 import { FindingsError, branchCommits, closeFinding, closingIds, daysOverdue, findingsConfig, isRefactor, isoDay, loadFindings, openFindings, overdue, parseFindings } from './findings.ts';
 import { baselineProblems, loadRatchets, tightenFile } from './ratchets.ts';
+import { release as releaseLeases } from './leases.ts';
 import { loadReviewConfig, reviewGate } from './review-receipt.ts';
 import { fetchRemote, foreignCommits, hasRemote, publish, REMOTE } from './remote.ts';
 import { verify } from './verify.ts';
@@ -164,6 +165,13 @@ export async function land(cwd: string, opts: LandOptions = {}): Promise<LandRes
     }
     const cleaned = await cleanMerged(root);
     if (cleaned) log(cleaned);
+    // The branch's work is in: its reservations go, so the sessions that waited for its exclusive zones can start
+    try {
+      const freed = releaseLeases(root, branch);
+      if (freed.zones.length) log(`leases: released exclusive zone(s) ${freed.zones.join(', ')}`);
+    } catch (e) {
+      log(`leases: could not release (${(e as Error).message}); they expire on their own`);
+    }
     const result: LandResult = { branch, commits, attempts, head: head.slice(0, 8), seconds: Math.round((Date.now() - started) / 1000), ...published, ...(opts.verifyCmd ? { verify: 'overridden' as const } : {}) };
     // `closes` and `refactor` are what the closure quota of later lands reads
     record(root, { ...result, closes, refactor, result: 'landed' });

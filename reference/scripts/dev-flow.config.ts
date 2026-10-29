@@ -183,6 +183,12 @@ export interface Config {
   roadmap?: Partial<{ maxActive: number; staleDays: number }>;
   // <<< 0.4.0 closure: findings, mutation smoke, WIP limit (end) <<<
 
+  /**
+   * Leases (`leases.ts`): minutes without a renewal before a lease is dead, and the exclusive zones. The `leases` block
+   * of `swarm.json` on the integration branch, when present, wins (like `review`).
+   */
+  leases?: Partial<{ ttlMinutes: number; exclusive: string[] }>;
+
   /** Sandbox folder for throw-away experiments; nothing in the product may import from it. */
   playgroundDir: string;
 
@@ -318,6 +324,9 @@ const defaults: Config = {
   mutation: { command: 'pnpm vitest run {files}', mode: 'warn' },
   roadmap: { maxActive: 12, staleDays: 14 },
   // <<< 0.4.0 closure: findings, mutation smoke, WIP limit (end) <<<
+
+  // Exclusive zones: contracts and schemas whose change invalidates other sessions' work. Keep the list short.
+  leases: { ttlMinutes: 30, exclusive: ['**/migrations/**', '*.sql', 'src/shared/types/**', 'src/**/contracts/**'] },
 
   playgroundDir: 'playground',
 

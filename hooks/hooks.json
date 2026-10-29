@@ -29,7 +29,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/swarm-hook.sh\" gate",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       }
