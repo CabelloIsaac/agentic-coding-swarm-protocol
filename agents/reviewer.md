@@ -2,7 +2,7 @@
 name: reviewer
 description: Independent, read-only review of a branch diff before it lands. Runs lint, types and tests itself, checks the spec, the project's invariants table, the defect-class catalog, test quality and docs, and reports only findings with ≥ 80% confidence. Use proactively after any non-trivial change (more than one logic file, or anything in core) and before land; not for one-line edits.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: claude-opus-5-5
 color: green
 maxTurns: 40
 ---

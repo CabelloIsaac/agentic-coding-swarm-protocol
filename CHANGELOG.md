@@ -12,6 +12,14 @@ All notable changes to this project are documented here. The format follows
   released `CHANGELOG.md` entry, the `README.md` Status line or the `INTEGRATION.md` examples disagree. A project
   does not need to act.
 
+### Changed
+
+- **Agents and evals pin full model IDs.** `agents/*.md` use `claude-opus-5-5` or `claude-sonnet-5-5` instead of the
+  `opus` / `sonnet` aliases, and the `evals` workflow defaults to `claude-sonnet-5-5`, as its own input description
+  asked. An alias moves when a model ships and differs by provider, so an eval regression could not be attributed.
+  Projects on a provider with different model IDs (Amazon Bedrock) copy the agent into `.claude/agents/` with their
+  ID (manual chapter 08).
+
 ### Fixed
 
 - `README.md` Status said `v0.3` while the plugin was 0.4.0.
