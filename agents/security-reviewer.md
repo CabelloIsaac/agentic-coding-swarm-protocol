@@ -2,7 +2,7 @@
 name: security-reviewer
 description: Read-only security review of a branch diff that touches auth, sessions, secrets, external input (webhooks, forms, fetched URLs, files), personal data, external effects (publish, send, pay), LLM tools or prompts, CI workflows or dependencies. Reports only exploitable issues with an exploit scenario and confidence ≥ 8/10. Use proactively before landing any change on those paths.
 tools: Read, Grep, Glob, Bash
-model: claude-opus-5-5
+model: opus
 color: red
 maxTurns: 50
 ---

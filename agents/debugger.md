@@ -2,7 +2,7 @@
 name: debugger
 description: Root-cause investigation of a failing test, a bug report, a flaky test or an error in logs, by explicit hypotheses tested against evidence. Produces a red reproduction test and the causal chain, not the fix. Use proactively when a failure's cause is not obvious, before anyone tries a second fix; escalate to the architect if the cause is in the design.
 disallowedTools: WebSearch
-model: claude-opus-5-5
+model: opus
 color: orange
 maxTurns: 60
 ---

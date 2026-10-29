@@ -2,7 +2,7 @@
 name: builder
 description: Bounded implementation of a plan that is already decided - one module, endpoint, migration, test suite or mechanical refactor - in its own worktree, test-first for bugs, finished only with a green full verify. Returns a short summary with evidence, not the code. Do not use for design decisions (architect), root-causing unknown bugs (debugger) or 1-2 edit tasks the main session can do directly.
 disallowedTools: WebFetch, WebSearch
-model: claude-sonnet-5-5
+model: sonnet
 color: blue
 maxTurns: 100
 ---

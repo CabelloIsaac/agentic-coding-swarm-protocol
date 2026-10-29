@@ -61,11 +61,10 @@ All notable changes to this project are documented here. The format follows
   renew --hook` after `wt wip`, and `leases check` as `hooks.preEdit`; `templates/claude/settings.no-plugin.json`
   wires the same. The `worktree` skill declares a plan with `claim` and treats a refused edit as a stop, never as
   something to route around. Chapter 01 explains shared leases and exclusive zones.
-- **Agents and evals pin full model IDs.** `agents/*.md` use `claude-opus-5-5` or `claude-sonnet-5-5` instead of the
-  `opus` / `sonnet` aliases, and the `evals` workflow defaults to `claude-sonnet-5-5`, as its own input description
-  asked. An alias moves when a model ships and differs by provider, so an eval regression could not be attributed.
-  Projects on a provider with different model IDs (Amazon Bedrock) copy the agent into `.claude/agents/` with their
-  ID (manual chapter 08).
+- **Evals pin a full model ID.** The `evals` workflow defaults to `claude-sonnet-5-5` instead of the `sonnet` alias,
+  as its own input description asked: an alias moves when a model ships, so an eval regression could not be
+  attributed. The shipped agents keep the aliases, which resolve on every provider (Amazon Bedrock and Google Cloud
+  use different full IDs); manual chapter 08 explains how to pin them per project.
 - The quality-gate hook and `hooks.preEdit` share the `PreToolUse` hook: a gate edit answered with `ask` or `deny`
   (`hooks.gateEdit`) returns that decision alone; every other edit then runs `hooks.preEdit` as above.
 - The plugin ships a fourth hook, `PostToolUse` on Edit/Write, which runs `hooks.postEdit` from `swarm.json` with the

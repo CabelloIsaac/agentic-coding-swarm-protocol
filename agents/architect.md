@@ -2,7 +2,7 @@
 name: architect
 description: Read-only design advisor for hard or high-impact problems - a cross-module design, a contract or invariant change, a trade-off between approaches, or a bug that has already survived two fix attempts. Returns options with trade-offs, one recommendation, a plan in verifiable steps and an ADR draft when one is needed. Expensive; do not use for searches, local changes or decisions already made.
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
-model: claude-opus-5-5
+model: opus
 color: purple
 maxTurns: 40
 ---

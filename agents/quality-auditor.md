@@ -2,7 +2,7 @@
 name: quality-auditor
 description: Scheduled, read-only weekly quality sweep of everything integrated into main in a period (default 7 days) - likely bugs, weak tests, structural erosion, stale docs, dependencies - with stable AUD-* ids and a delta against the previous report. Writes one report file and fixes nothing. Use for the weekly review or when asked to audit recently landed work; for the biweekly whole-repo audit use the audit-repo skill.
 tools: Read, Grep, Glob, Bash, Write
-model: claude-opus-5-5
+model: opus
 color: yellow
 maxTurns: 80
 ---
