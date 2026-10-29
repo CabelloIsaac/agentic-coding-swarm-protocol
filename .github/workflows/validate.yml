@@ -17,6 +17,8 @@ jobs:
           node-version: 24
       - name: Links and cited paths resolve
         run: node scripts/check-links.mjs
+      - name: Versions agree (plugin.json, template, changelog, README, INTEGRATION.md)
+        run: node scripts/check-version.mjs
       - name: Eval suite loads (structure only, no model calls)
         run: node scripts/check-evals.mjs
       - name: Conformance checker self-test

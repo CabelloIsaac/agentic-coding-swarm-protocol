@@ -31,12 +31,14 @@ How the protocol is governed (owner, review of gate changes, versioning, release
 
    ```bash
    node scripts/check-links.mjs
+   node scripts/check-version.mjs
    node scripts/check-evals.mjs
+   node --test 'scripts/*.test.mjs'
    claude plugin validate .
    node --test 'reference/self-test/*.test.ts'
    ```
 
-   CI runs the same four on every push and pull request.
+   CI runs the same six on every push and pull request.
 
 3. Open a pull request describing the problem, the evidence and the change. Update `CHANGELOG.md`.
 
@@ -60,6 +62,7 @@ people run them.
   that fails without it, like the `AUD-land-sha-no-fijado` regression in `land.test.ts`.
 - **Conformance checker:** `node --test 'scripts/*.test.mjs'` runs `scripts/check-conformance.mjs` (the mechanical half of
   `/swarm:adopt --check`) against throw-away repositories built from `templates/`; change a §6 check and its test together.
+  The same glob runs `scripts/check-version.mjs` (every place that states the version agrees with `plugin.json`).
 - **Type-check** (optional, needs `typescript` and `@types/node`): `npx tsc --noEmit --allowImportingTsExtensions
   --module nodenext --target es2023 --strict --noUncheckedIndexedAccess --skipLibCheck --types node <files>`.
 

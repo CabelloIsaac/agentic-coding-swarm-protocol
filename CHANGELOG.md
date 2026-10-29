@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Version coherence check.** `scripts/check-version.mjs` (a `validate` CI step, with its self-test in
+  `scripts/check-version.test.mjs`) fails when `.claude-plugin/plugin.json`, `templates/swarm.json`, the first
+  released `CHANGELOG.md` entry, the `README.md` Status line or the `INTEGRATION.md` examples disagree. A project
+  does not need to act.
+
+### Fixed
+
+- `README.md` Status said `v0.3` while the plugin was 0.4.0.
+
 ## [0.4.0] — 2026-10-28
 
 An independent code analysis of the reference project, run on the same day as the 0.3.1 audit, found that detection

@@ -187,7 +187,7 @@ call them. The manual is never loaded wholesale: the `playbook` skill reads a si
 
 ## Status
 
-`v0.3` — the workflow, gates and review processes run daily in the reference project; the reference `land`, `verify`,
+`v0.4.0` — the workflow, gates and review processes run daily in the reference project; the reference `land`, `verify`,
 `wt`, `adr`, ratchets and review gate are covered by self-tests that CI runs on every push. Chapter 12 (autonomy and
 risk tiers) is a design that is not yet enforced there, and says so. See [CHANGELOG.md](CHANGELOG.md).
 
