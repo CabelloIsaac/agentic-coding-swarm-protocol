@@ -10,7 +10,8 @@ Agents with Claude Code hooks get steps 1 and 3 automatically. Everyone else doe
 
 1. **Start in your own worktree and branch.** Never edit or commit in the main checkout.
    `git worktree add ../<repo>-<task> -b <task>`, then run `hooks.sessionStart` from `swarm.json`.
-2. **Iterate** with `commands.verifyQuick`. It never closes a task.
+2. **Iterate** with `commands.verifyQuick`. It never closes a task. Every few commits, run `commands.overlap` (if
+   present): another session touching your files is cheaper to find now than at land.
 3. **Before you stop, every time, commit.** There is no automatic `wip:` commit without hooks. Record each decision
    taken without asking as a trailer: `Assumption: <what> — <why>`.
 4. **Finish** with `commands.verify` (the same as CI) and show its output. Ask for an independent review of the

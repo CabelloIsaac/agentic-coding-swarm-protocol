@@ -59,6 +59,36 @@ branch is running (land integrates exactly the SHA it verified, so a commit duri
 branch, it uses `--amend`: there is at most **one** rolling wip commit. Nothing is lost if the session dies, and
 `land` refuses to integrate a stray `wip:` (use `wt:commit` or `land --squash "<message>"`).
 
+## Early overlap detection (`overlap`)
+
+Worktrees stop sessions from overwriting each other's files. They do not stop two sessions from doing incompatible
+work: both stay green on their own branch, and the collision appears when the second one runs `land`, after both have
+spent their tokens and a full verify. The later it appears, the more work is thrown away, and with N parallel sessions
+there are N·(N−1)/2 pairs that can collide.
+
+`overlap` moves that moment to the first minutes. It is read-only and never blocks:
+
+| Finding | How it is found | What the agent does |
+| --- | --- | --- |
+| ✗ **conflict** — two branches will not merge | `git merge-tree --write-tree` between the two tips (git 2.38+): no checkout, milliseconds, only for pairs that share a file | stop and coordinate; whoever lands second resolves it on its branch |
+| ⚠ **shared** — two branches touch the same file, git merges it cleanly | changed files since the merge base, plus uncommitted ones (generated files excluded) | read what the other branch is changing; a clean merge can still be a semantic conflict |
+| ⚠/✗ **behind** — the integration branch changed files this branch touches | merge base → integration branch, intersected with the branch's files; merge-tree predicts the rebase | rebase now, while it is small |
+
+Where it runs:
+
+- **Session start** (`overlap --session`, after `wt:setup`): the other live sessions and the areas they touch
+  (`feature-x: src/billing (4)`), so the agent can pick its approach before it edits anything.
+- **After an edit** (`overlap --notify`, a `PostToolUse` hook on Edit/Write): checks this branch at most every
+  `notifyEveryMinutes` (default 5) and speaks only when the overlap **changed** since its last notice, as
+  `additionalContext` the agent reads next to the tool result. A pair that keeps overlapping is not repeated on every
+  edit; a new pair, a new file or a new predicted conflict is.
+- **On demand:** `node scripts/dev/overlap.ts` (`--all` for every pair, `--json`, `--strict` to exit 1 on a
+  predicted conflict).
+
+What it does not see: a dependency between different files (A changes a function's signature in one file, B adds a
+call to it in another). That needs the stack's import graph; until then, `verify --quick` after a rebase is what
+catches it. It also sees only the worktrees of this clone: sessions on other machines are invisible until they publish.
+
 ## Resource hygiene
 
 Each worktree is ~800 MB of `node_modules` and, with dev servers and vitest, several GB of RAM. Rules:
@@ -124,13 +154,16 @@ from the default branch and is cleaned up automatically if nothing changed. Usef
 - **Leftovers from an old dev server** (`.next/types`) break typecheck after a rebase → delete the generated folder
   (it is git-ignored).
 - **Semantic clashes git cannot see** (two branches change the same logic without touching the same lines): read
-  the failing test; do not just rerun.
+  the failing test; do not just rerun. `overlap` flags the shared files early; it cannot prove the logic agrees.
+- **Ignoring an overlap notice** because "git will merge it": a clean textual merge of two changes to the same
+  function is exactly where the semantic clash hides.
 - **Two ADRs with the same number** (one numbered on the branch, another on main): drop the numbering commit and
   let `land` renumber the draft.
 
 ## What to copy into your repo
 
-`reference/scripts/wt.ts` (setup, wip, commit, gc, reap, status, archive) with `reference/scripts/procs.ts` (process
+`reference/scripts/wt.ts` (setup, wip, commit, gc, reap, status, archive) and `reference/scripts/overlap.ts` (early
+overlap detection, wired as `hooks.postEdit` and after `wt:setup`) with `reference/scripts/procs.ts` (process
 ownership by `cwd`, group kills) and `reference/scripts/remote.ts` (divergence check); the `pre-push` hook in
 `templates/githooks/pre-push`; and the `SessionStart`/`Stop` hook wiring in `templates/claude/settings.json`. Keep
 the two non-negotiables: a session hook always exits 0, and nothing is deleted without a published archive tag.

@@ -28,6 +28,7 @@ log files verify writes would otherwise appear as "uncommitted change(s) appeare
 | `reference/scripts/git.ts` | `land` (lock, stale detection, fast-forward helpers) and `wt` (worktree parsing) |
 | `reference/scripts/review-receipt.ts` | Review gate — receipts keyed by patch id (`write`, `check`) |
 | `reference/scripts/wt.ts` | `wt` — worktree tooling |
+| `reference/scripts/overlap.ts` | `overlap` — early overlap detection between session branches |
 | `reference/scripts/procs.ts` | Memory and process helpers |
 | `reference/scripts/adr.ts` | `adr` — conflict-free decision records |
 | `reference/scripts/roadmap.ts` | `roadmap` — derived status |
@@ -215,6 +216,31 @@ branch protection; the receipt is then the review approval on the pull request.
 
 **Live session** = an agent process whose cwd is inside the worktree, or a worktree lock whose recorded pid is alive.
 **A process belongs to the worktree that contains its cwd** (`lsof -d cwd -Fpn` on macOS, `/proc/<pid>/cwd` on Linux).
+
+## `overlap` — early overlap detection
+
+Read-only; never commits, rebases, fetches or blocks. Configuration: `overlap.notifyEveryMinutes` (default 5) and
+`overlap.listFiles` (default 5).
+
+- **Active branch:** a linked worktree on its own branch whose `git diff --name-only <integration>...<branch>` or dirty
+  paths are non-empty. Its files are the union of both, minus `generatedFiles`.
+- **Pair (shared / conflict):** for every two active branches with a file in common, `git merge-tree --write-tree
+  --name-only --no-messages -z A B`. Exit 0 = merges cleanly, 1 = conflict (the file names follow the tree id), any
+  other status = unknown (git older than 2.38: the report then lists shared files only and says so). Pairs without a
+  shared file are never merge-tree'd: a textual conflict needs one.
+- **Behind:** files the integration branch changed since `merge-base(integration, branch)` that the branch also
+  touches; merge-tree of the integration branch with the branch predicts the rebase.
+- **Scope:** in a linked worktree the default is its own branch (the pair reads "mine ↔ theirs"); `--all` or the main
+  checkout reports every pair; `--branch <b>` picks one.
+- **`--session`** (after `wt setup` in `hooks.sessionStart`): the other active branches with their top areas, then
+  this branch's findings. Silent when it is the only active branch.
+- **`--notify`** (`hooks.postEdit`): reads the hook JSON on stdin and resolves the worktree from
+  `tool_input.file_path` (then `cwd`), because the hook itself runs in the project root. Throttled by
+  `notifyEveryMinutes`, measured from the last check; prints `{"hookSpecificOutput": {"hookEventName": "PostToolUse",
+  "additionalContext": …}}` only when the findings are non-empty and their signature (pairs, files, conflicts) differs
+  from the last check. State: `<git-common-dir>/<project>-overlap/<branch>.json`.
+- **Exit codes:** 0, or 1 with `--strict` when a conflict is predicted. In `--session` and `--notify` every error exits
+  0: a hook never blocks a session.
 
 ## Memory and process helpers
 

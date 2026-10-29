@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Early overlap detection (`overlap`).** Worktrees isolate files, not work: two sessions can make incompatible
+  changes, both stay green, and the collision only appears at the second `land`, after both spent their tokens and a
+  full verify. `reference/scripts/overlap.ts` reports, read-only, which active session branches touch the same files,
+  which pairs `git merge-tree --write-tree` predicts will conflict, and which branches the integration branch moved
+  under (files it changed that the branch also touches, with the rebase conflict predicted). It runs after `wt setup`
+  (`--session`: the other live sessions and their areas), after edits through a new `PostToolUse` plugin hook
+  (`--notify`: throttled, and only when the overlap changed, as `additionalContext`), and on demand (`--all`,
+  `--json`, `--strict`). Self-tests in `reference/self-test/overlap.test.ts`; the hook in
+  `scripts/swarm-hook-post-edit.test.mjs`.
+
+### Changed
+
+- The plugin ships a fourth hook, `PostToolUse` on Edit/Write, which runs `hooks.postEdit` from `swarm.json` with the
+  hook JSON on stdin and returns its stdout (INTEGRATION.md §1–§3). Still exit 0 always; a no-op without the key.
+- `templates/swarm.json` and `templates/claude/settings.no-plugin.json` wire `overlap --session` after `wt setup` and
+  `overlap --notify` as `hooks.postEdit`; `commands.overlap` is a new optional key. The `worktree` skill reads the
+  notices; chapter 01 explains the three findings and what they cannot see.
+
+### Migration
+
+Nothing breaks: no conformance check changes. To use it, copy `reference/scripts/overlap.ts` to `scripts/dev/`, add
+`commands.overlap` and `hooks.postEdit`, and append `; node scripts/dev/overlap.ts --session` to `hooks.sessionStart`.
+Conflict prediction needs git 2.38 or later; with an older git it reports shared files only and says so.
+
 ## [0.4.0] — 2026-10-28
 
 An independent code analysis of the reference project, run on the same day as the 0.3.1 audit, found that detection

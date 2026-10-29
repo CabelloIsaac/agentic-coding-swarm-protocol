@@ -13,11 +13,13 @@
     "newAdr": "docs/adr/draft-<slug>.md",
     "audit": "pnpm audit:repo",
     "ratchets": "node scripts/dev/ratchets.ts",
-    "findings": "node scripts/dev/findings.ts"
+    "findings": "node scripts/dev/findings.ts",
+    "overlap": "node scripts/dev/overlap.ts"
   },
   "hooks": {
-    "sessionStart": "node scripts/dev/wt.ts setup",
-    "stop": "node scripts/dev/wt.ts wip"
+    "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/overlap.ts --session",
+    "stop": "node scripts/dev/wt.ts wip",
+    "postEdit": "node scripts/dev/overlap.ts --notify"
   },
   "findings": {
     "file": "docs/audits/findings.jsonl",

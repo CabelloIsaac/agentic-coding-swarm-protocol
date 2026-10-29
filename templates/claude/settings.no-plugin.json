@@ -1,5 +1,5 @@
 {
-  "$comment": "Variant of settings.json for agents or teams WITHOUT the swarm plugin: it adds the two session hooks the plugin would run. The commands come from swarm.json -> hooks.sessionStart / hooks.stop (the defaults below are the Node reference scripts). If the repo has no such scripts (swarm.json has no hooks block), delete the SessionStart and Stop entries: a hook that points at a missing script only prints errors. Do not use this file together with the plugin: the hooks would run twice.",
+  "$comment": "Variant of settings.json for agents or teams WITHOUT the swarm plugin: it adds the session hooks the plugin would run. The commands come from swarm.json -> hooks.sessionStart / hooks.stop / hooks.postEdit (the defaults below are the Node reference scripts). If the repo has no such scripts (swarm.json has no hooks block), delete the SessionStart and Stop entries: a hook that points at a missing script only prints errors. Do not use this file together with the plugin: the hooks would run twice.",
   "worktree": {
     "baseRef": "head"
   },
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" setup",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" setup; node \"$CLAUDE_PROJECT_DIR/scripts/dev/overlap.ts\" --session",
             "timeout": 180
           }
         ]
@@ -47,6 +47,18 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/wt.ts\" wip",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/dev/overlap.ts\" --notify; exit 0",
+            "timeout": 15
           }
         ]
       }

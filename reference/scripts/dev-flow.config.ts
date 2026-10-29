@@ -183,6 +183,12 @@ export interface Config {
   roadmap?: Partial<{ maxActive: number; staleDays: number }>;
   // <<< 0.4.0 closure: findings, mutation smoke, WIP limit (end) <<<
 
+  /**
+   * Early overlap detection (`overlap.ts`): minimum minutes between two checks of the PostToolUse notice (each check
+   * runs `git merge-tree` against the other active branches) and how many files a line lists before "and N more".
+   */
+  overlap?: Partial<{ notifyEveryMinutes: number; listFiles: number }>;
+
   /** Sandbox folder for throw-away experiments; nothing in the product may import from it. */
   playgroundDir: string;
 
@@ -318,6 +324,8 @@ const defaults: Config = {
   mutation: { command: 'pnpm vitest run {files}', mode: 'warn' },
   roadmap: { maxActive: 12, staleDays: 14 },
   // <<< 0.4.0 closure: findings, mutation smoke, WIP limit (end) <<<
+
+  overlap: { notifyEveryMinutes: 5, listFiles: 5 },
 
   playgroundDir: 'playground',
 
