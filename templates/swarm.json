@@ -19,7 +19,8 @@
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/leases.ts session",
     "stop": "node scripts/dev/wt.ts wip; node scripts/dev/leases.ts renew --hook",
-    "preEdit": "node scripts/dev/leases.ts check"
+    "preEdit": "node scripts/dev/leases.ts check",
+    "gateEdit": "warn"
   },
   "leases": {
     "ttlMinutes": 30,

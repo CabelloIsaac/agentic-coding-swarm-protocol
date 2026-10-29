@@ -2,7 +2,7 @@
 name: docs-keeper
 description: Brings documentation back in sync with a code change - new folders, integrations, log types, commands, extension points, renamed or removed paths and functions - with minimal edits and nothing invented. Use proactively when the docs test or the link check fails, or before landing a change that adds or renames structure.
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: claude-sonnet-5-5
 color: pink
 maxTurns: 40
 ---

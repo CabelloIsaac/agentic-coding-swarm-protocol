@@ -159,7 +159,9 @@ Flags: `--squash "<message>"`, `--no-push`, `--no-review "<reason>"`, `--overrid
 8. Release the lock in `finally`.
 
 **PR mode** (for teams that integrate through pull requests): steps 1–4.4 run with the quick tier, then push the
-branch and open a PR with auto-merge; the merge queue runs the full gate and numbers ADRs.
+branch and open a PR with auto-merge; the merge queue runs the full gate and numbers ADRs. A merge queue is not
+available on every GitHub plan for private repositories: verify against your plan, and without one keep the full
+gate in local `land` and merge the verified branch without rewriting it ([manual chapter 16](../manual/16-efficiency-and-real-world-use.md) §0).
 
 ## Review gate — receipts
 

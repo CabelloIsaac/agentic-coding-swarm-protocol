@@ -32,7 +32,8 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
   "hooks": {
     "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/leases.ts session",
     "stop": "node scripts/dev/wt.ts wip; node scripts/dev/leases.ts renew --hook",
-    "preEdit": "node scripts/dev/leases.ts check"
+    "preEdit": "node scripts/dev/leases.ts check",
+    "gateEdit": "warn"
   },
   "leases": { "ttlMinutes": 30, "exclusive": ["**/migrations/**", "*.sql", "src/shared/types/**"] },
   "gates": ["*/vitest.config.*", "*/architecture.test.*", "*/docs.test.*", "*/scripts/dev/*"],
@@ -62,6 +63,7 @@ after the conformance checks for that level pass (§6).
 | `findings` | level 2 (L2.8, L2.9) | `{ file, sla, closureEvery }`: the ledger path (default `docs/audits/findings.jsonl`), days to close by severity (defaults 2 / 14 / 60) and the closure quota N (default 3). `land` reads it from the integration branch. |
 | `roadmap` | level 3 (L3.6) | `{ maxActive, staleDays }`: active changes allowed at once (default 12) and days without a ticked task before a change counts as stale (default 14) unless its proposal carries `parked: <reason>`. The roadmap validator enforces both inside `verify`. |
 | `gates` | optional | Extra file globs whose edits trigger the quality-gate warning. |
+| `hooks.gateEdit` | optional | What the plugin's gate hook does when an agent edits a quality-gate file (§3): `warn` (default; a message, the edit goes ahead), `ask` (the person approves that one edit) or `block` (the edit is denied with the reason). Any other value means `warn`. |
 | `review.mode`, `review.sensitive` | optional (L2.7) | When `land` requires a review receipt: `always`, `sensitive` (default: only if a changed path matches a `sensitive` glob) or `off`. Read from the integration branch, so a branch cannot relax its own gate. Template default: `sensitive`, with globs for auth, payments, migrations, CI, quality gates and settings. |
 
 Missing keys fall back to the defaults in the template (Node and pnpm). A skill that uses a fallback says so in its
@@ -130,8 +132,14 @@ for one deliberate refusal:
 
 - **SessionStart** runs `hooks.sessionStart` from `swarm.json`.
 - **Stop** runs `hooks.stop`.
-- **PreToolUse (Edit/Write)** warns, without blocking, when a file matching a quality-gate glob is edited: the
-  defaults plus `gates` from `swarm.json`. Then it runs `hooks.preEdit`, if present, with the hook JSON on stdin and
+- **PreToolUse (Edit/Write)** reacts when a file matching a quality-gate glob is edited (the defaults plus `gates`
+  from `swarm.json`), as `hooks.gateEdit` says. `warn`, the default, prints a message and lets the edit through, so
+  the gate is only stopped at `land` and review. `ask` and `block` answer with the `PreToolUse` permission decision
+  on stdout (`ask` or `deny`, with the reason) and still exit 0, so a broken hook never blocks a session. With
+  `block` an agent cannot edit `swarm.json` either: a person changes the mode by hand. In a non-interactive run
+  nobody answers `ask`; check what your harness does with it before relying on it there. The warning in
+  `templates/claude/settings.json` is independent of the plugin and only warns.
+  For every edit that the gate does not answer with `ask` or `deny`, it then runs `hooks.preEdit`, if present, with the hook JSON on stdin and
   passes its stdout back; if that command exits 2, the hook exits 2 and Claude Code refuses the edit, showing the
   command's stderr to the agent. Any other exit status is ignored. The template uses it for leases: an edit inside an
   exclusive zone that another live session holds. Because the hook runs in the project root, the command finds the
@@ -159,6 +167,35 @@ itself uses the stack's native tools:
 | Rust | `cargo clippy -- -D warnings` | `cargo check` | a `validate` binary with serde + schema checks | `cargo llvm-cov --fail-under-lines <N>` | `cargo test -p <changed crates>` | module visibility, cargo-deny for dependencies |
 | JVM (Gradle) | Spotless or Checkstyle | the compiler | a Gradle task with a JSON Schema validator | `gradle check` with JaCoCo violation rules | `:<module>:test` for changed modules | ArchUnit |
 | Anything | `make lint` | `make typecheck` | `make validate` | `make test` | `make test-changed` | a test in the project's own test runner |
+
+### Python, command by command
+
+For a Python project that keeps the Node 24 reference scripts as dev tooling, this is the full mapping: the
+`swarm.json` commands, every step of the reference `verify` (`verify.full` and `verify.quick` in
+`reference/scripts/dev-flow.config.ts`, which `land` also runs), and the 0.4.0 ratchets, dependency gate and mutation
+smoke. Commands assume uv, Ruff, pyright, pytest with pytest-cov, import-linter, pip-audit, mutmut and Hypothesis as
+dev dependencies; check the flags against the versions you pin.
+
+| Concern | Reference (TypeScript) | Python |
+|---|---|---|
+| `commands.setup`, `installCommand`, `setupInstallCommand` | `pnpm install --frozen-lockfile` | `uv sync --locked` (fails when `uv.lock` is out of date) |
+| `lockfile`, `installMarker` (re-install after a rebase) | `pnpm-lock.yaml`, `node_modules/.modules.yaml` | `uv.lock`, `.venv/pyvenv.cfg` |
+| verify `lint` | `pnpm -s lint` | `uv run ruff check .` |
+| verify `format` | `pnpm -s biome format .` | `uv run ruff format --check .` |
+| verify `typecheck` | `pnpm -s typecheck` | `uv run pyright` (strict mode in `pyproject.toml`) or `uv run mypy` |
+| verify `validators` | `pnpm -s validate:registry` | `uv run python -m <package>.validate` with Pydantic models, or `uvx check-jsonschema --schemafile <schema> <files>` |
+| verify `tests + coverage` | `pnpm -s test:coverage` | `uv run pytest --cov=<package> --cov-branch --cov-report=json:coverage/coverage.json` (pytest-cov). Property tests use Hypothesis inside the same run; a CI settings profile with `derandomize=True` keeps the gate reproducible |
+| verify `ratchets`, coverage floor | reads `coverage/coverage-summary.json` (Istanbul `{ total: { lines: { pct } } }`) | coverage.py writes another shape: convert it after the tests, for example `jq '{total: {lines: {pct: (.totals.covered_lines * 100 / .totals.num_statements)}, branches: {pct: (if .totals.num_branches > 0 then .totals.covered_branches * 100 / .totals.num_branches else 100 end)}}}' coverage/coverage.json > coverage/coverage-summary.json`, and keep only `lines` and `branches` in `coverage.floor` (a metric the summary lacks is not judged) |
+| ratchets `fileSize` | `include` of `*.ts` globs | `"include": ["src/**/*.py"]`, `"exclude": ["tests/**", "**/test_*.py"]` |
+| ratchets `lintWarnings` | Biome or ESLint JSON with warnings | Ruff has no warning level (a rule passes or fails): drop the block, or point `command` at a wrapper that prints ESLint-shaped JSON for the rules you treat as warnings |
+| ratchets `silentErrors` | the TypeScript `catch` scanner | the scanner does not read Python: enable Ruff `S110` (`try`/`except`/`pass`), `S112` (`try`/`except`/`continue`) and `BLE001` (blind `except Exception`); put today's hits in `per-file-ignores` and let that list only shrink (`pyproject.toml` is then a `review.sensitive` path) |
+| verify `structural rules`, architecture | `pnpm -s test:arch` | `uv run lint-imports` (import-linter contracts in `pyproject.toml`) |
+| verify `mutation smoke` | `node scripts/dev/mutation-smoke.ts`, `mutation.command: "pnpm vitest run {files}"` | the same script: it already mutates `.py` (`True`/`False`, `and`/`or`, `==`) and finds `test_<name>.py`; set `mutation.command` to `"uv run pytest -q {files}"`. For real mutation testing, schedule `uv run mutmut run` outside `verify` |
+| verify `deps` (`deps-audit`) | `deps.command: "pnpm audit --prod --json"` | `deps.command: "uv export --frozen --no-dev --no-emit-project --format requirements-txt -o tmp/requirements.audit.txt && uvx pip-audit --disable-pip -r tmp/requirements.audit.txt -f json"` (the exported file carries hashes, which `--disable-pip` needs; `--no-emit-project` drops the unhashed `-e .` line). pip-audit reports no severity, so every advisory counts as `high` and fails unless `deps-allowlist.json` lists its `PYSEC-…`, `GHSA-…` or `CVE-…` id |
+| quick tier | `vitest run --changed`, Biome on changed files | `uv run ruff check <changed .py files>`, `uv run pytest --testmon` (pytest-testmon) or the tests under the changed paths |
+| `commands.verify`, `verifyQuick` | `pnpm verify`, `pnpm verify --quick` | `node scripts/dev/verify.ts`, `node scripts/dev/verify.ts --quick` with the steps above in `verify.full` and `verify.quick` |
+| `commands.land`, `commit`, `status`, `newAdr` | `pnpm land`, `pnpm wt:commit`, `pnpm wt:status` | `node scripts/dev/land.ts`, `node scripts/dev/wt.ts commit`, `node scripts/dev/wt.ts status`; unchanged, since `land` only runs git and the configured `verify` |
+| `commands.ratchets`, `commands.findings` | `node scripts/dev/ratchets.ts`, `node scripts/dev/findings.ts` | unchanged |
 
 Wrap the steps in one entry point (`make verify`, `just verify`, `tox -e verify`, a script) and put that in
 `commands.verify`. A bare `make verify: lint test` cannot meet the §2 guarantee (one line per step, the tail of each

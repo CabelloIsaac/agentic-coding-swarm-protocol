@@ -39,7 +39,8 @@ happens there (example: `templates/claude/rules/storage.md`).
 | `WorktreeCreate` | — | install deps when the worktree is created |
 | `PreCompact` | automatic checkpoint (context policy) | save state before detail is lost |
 
-Principles: a session hook **never blocks** (it exits 0 even on failure); `exit 2` only for zero-exception rules;
+Principles: a session hook **never blocks** (it exits 0 even on failure); `exit 2` only for zero-exception rules
+(the plugin's gate hook can deny or ask for an edit of a quality gate with `hooks.gateEdit`, INTEGRATION.md §3);
 `onFailure: "block"` for security hooks (so a hook failure also blocks); keep the set small (if you reach forty,
 most were preferences). `prompt`/`agent` hooks are decided by another model: they are not deterministic and cannot
 enforce anything. Plugin hooks: `hooks/hooks.json`.
@@ -98,16 +99,23 @@ conditions and a compact return format so the main context stays small:
 
 | Agent | Model | Tools | For | Returns |
 | --- | --- | --- | --- | --- |
-| `builder` | sonnet | all but web (run it in a worktree; `isolation: worktree` when several run in parallel) | scoped implementation with the plan already decided; test-first for bugs; full `verify` before "done"; never touches a gate | ≤ 15 lines: status, files, tests (red → green), verify line, assumptions |
-| `reviewer` | opus | Read, Grep, Glob, Bash | independent diff review after non-trivial changes; runs lint/types/tests; spec, invariants, test strength, docs | verdict, gate lines, High/Medium findings with confidence ≥ 80 and a trigger |
-| `security-reviewer` | opus | Read, Grep, Glob, Bash | diffs touching auth, secrets, external input, personal data, external effects, LLM tools, CI or dependencies | exploitable findings (confidence ≥ 8/10) with exploit steps, impact and fix; hard exclusion list |
-| `test-auditor` | sonnet | Read, Grep, Glob, Bash | tests written by the same agent as the code; money, data or deletion logic | surviving mutants and test smells, highest risk first |
-| `debugger` | opus | all but web search; edits only the repro test | a failure whose cause is not obvious, before a second fix | root cause, causal chain, hypotheses tried, a red reproduction test |
-| `docs-keeper` | sonnet | Read, Grep, Glob, Bash, Edit, Write (docs only) | docs test or link check failing; new or renamed structure | minimal edits, checks before → after |
-| `architect` | opus | Read, Grep, Glob, Bash, Web | hard problems, debugging that failed twice, contract or invariant changes | options table, ONE recommendation, invariant check, plan in verifiable steps, ADR draft |
-| `quality-auditor` | opus | Read, Grep, Glob, Bash, Write (report only; `maxTurns: 80`) | scheduled sweep of everything integrated in a period | report in `openspec/audits/` with stable `AUD-*` ids and deltas |
+| `builder` | `claude-sonnet-5-5` | all but web (run it in a worktree; `isolation: worktree` when several run in parallel) | scoped implementation with the plan already decided; test-first for bugs; full `verify` before "done"; never touches a gate | ≤ 15 lines: status, files, tests (red → green), verify line, assumptions |
+| `reviewer` | `claude-opus-5-5` | Read, Grep, Glob, Bash | independent diff review after non-trivial changes; runs lint/types/tests; spec, invariants, test strength, docs | verdict, gate lines, High/Medium findings with confidence ≥ 80 and a trigger |
+| `security-reviewer` | `claude-opus-5-5` | Read, Grep, Glob, Bash | diffs touching auth, secrets, external input, personal data, external effects, LLM tools, CI or dependencies | exploitable findings (confidence ≥ 8/10) with exploit steps, impact and fix; hard exclusion list |
+| `test-auditor` | `claude-sonnet-5-5` | Read, Grep, Glob, Bash | tests written by the same agent as the code; money, data or deletion logic | surviving mutants and test smells, highest risk first |
+| `debugger` | `claude-opus-5-5` | all but web search; edits only the repro test | a failure whose cause is not obvious, before a second fix | root cause, causal chain, hypotheses tried, a red reproduction test |
+| `docs-keeper` | `claude-sonnet-5-5` | Read, Grep, Glob, Bash, Edit, Write (docs only) | docs test or link check failing; new or renamed structure | minimal edits, checks before → after |
+| `architect` | `claude-opus-5-5` | Read, Grep, Glob, Bash, Web | hard problems, debugging that failed twice, contract or invariant changes | options table, ONE recommendation, invariant check, plan in verifiable steps, ADR draft |
+| `quality-auditor` | `claude-opus-5-5` | Read, Grep, Glob, Bash, Write (report only; `maxTurns: 80`) | scheduled sweep of everything integrated in a period | report in `openspec/audits/` with stable `AUD-*` ids and deltas |
 
 When each one acts: chapter 15.
+
+Models are pinned by full ID, not by alias: an alias (`opus`, `sonnet`) moves when a new model ships and resolves to
+different models on different providers, so a change in behavior or in an eval could not be attributed to the plugin
+or to the model. Bumping an agent's `model` is a plugin change with its own `CHANGELOG.md` line. Teams on a provider
+whose model IDs differ from the Anthropic API ones (Amazon Bedrock, for example) copy the agent into
+`.claude/agents/` with their provider's ID; verify the IDs your provider accepts in the Claude Code model
+configuration docs.
 
 Rules: keep the description short (it loads in every session; more than 15,000 tokens across all of them triggers a
 warning); the body is the system prompt; repeat the critical rules in the delegation prompt (the subagent does not

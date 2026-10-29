@@ -15,7 +15,7 @@ on:
         default: '10'
       model:
         description: Model under test; pin a full model ID to compare runs over time (a rollout is not a plugin regression)
-        default: sonnet
+        default: claude-sonnet-5-5
 permissions:
   contents: read
 jobs:

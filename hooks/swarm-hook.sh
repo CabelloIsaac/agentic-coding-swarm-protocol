@@ -1,8 +1,10 @@
 #!/bin/sh
 # Swarm Protocol plugin hooks. Contract: INTEGRATION.md §3.
 # Usage: swarm-hook.sh session-start | stop | gate
-# A hook never blocks a session: every path exits 0, except one deliberate refusal: `hooks.preEdit` exiting 2 (a
-# lease on an exclusive zone held by another live session) is passed on, and Claude Code then refuses that edit.
+# A hook never blocks a session: every path exits 0, with two deliberate exceptions. The gate hook may deny or ask
+# for one edit, through the PreToolUse JSON decision on stdout, when swarm.json sets hooks.gateEdit to "block" or
+# "ask" (default "warn"); and `hooks.preEdit` exiting 2 (a lease on an exclusive zone held by another live session)
+# is passed on, and Claude Code then refuses that edit.
 
 mode=$1
 root=${CLAUDE_PROJECT_DIR:-$(pwd)}
@@ -67,16 +69,36 @@ case "$mode" in
       [ -n "$extra" ] && patterns="$patterns
 $extra"
     fi
-    printf '%s\n' "$patterns" | while IFS= read -r p; do
+    matched=$(printf '%s\n' "$patterns" | while IFS= read -r p; do
       [ -z "$p" ] && continue
       # shellcheck disable=SC2254 # the pattern is a glob on purpose
+      # "($p)": bash 3.2 (macOS /bin/sh) cannot parse an unopened case pattern inside $(...).
       case "$file" in
-        $p)
-          echo "swarm: you are touching a quality gate ($file). Justify it in the commit; never relax it to make something pass." >&2
+        ($p)
+          echo "$p"
           break
           ;;
       esac
-    done
+    done)
+    if [ -n "$matched" ]; then
+      action=
+      [ -f "$manifest" ] && action=$(json .hooks.gateEdit "$manifest")
+      case "$action" in
+        block | ask)
+          # deny: the edit does not happen and the agent sees the reason; ask: the person confirms this one edit.
+          decision=ask
+          [ "$action" = block ] && decision=deny
+          esc=$(printf '%s' "$file" | sed 's/\\/\\\\/g; s/"/\\"/g')
+          reason="swarm: $esc is a quality gate (hooks.gateEdit: $action in swarm.json). A person edits it, or approves the edit, and justifies it in the commit; never relax a gate to make something pass."
+          printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"%s"}}\n' "$decision" "$reason"
+          # The decision answers alone: a second JSON from hooks.preEdit on the same stdout would not parse.
+          exit 0
+          ;;
+        *)
+          echo "swarm: you are touching a quality gate ($file). Justify it in the commit; never relax it to make something pass." >&2
+          ;;
+      esac
+    fi
     # hooks.preEdit gets the hook JSON on stdin; its stdout (PreToolUse additionalContext) goes back to Claude Code.
     # Only its exit 2 is passed on: any other failure must not block an edit.
     if [ -f "$manifest" ]; then

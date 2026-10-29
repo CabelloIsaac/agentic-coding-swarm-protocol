@@ -54,7 +54,7 @@ so; otherwise it is minor or major by the table above.
 - [ ] Every change since the last release has a `CHANGELOG.md` entry under `Unreleased`, in Keep a Changelog
       sections (Added, Changed, Fixed, Removed, Security), each saying **what a project must do**, if anything.
 - [ ] A major has a `### Migration` section: the exact steps and the `--check` that proves them.
-- [ ] `node scripts/check-links.mjs`, `node scripts/check-evals.mjs`, `claude plugin validate .`,
+- [ ] `node scripts/check-links.mjs`, `node scripts/check-version.mjs`, `node scripts/check-evals.mjs`, `claude plugin validate .`,
       `node --test 'reference/self-test/*.test.ts'` and `node --test 'scripts/*.test.mjs'` pass.
 - [ ] Before a minor: a fresh-eyes audit of this repository by an agent with no prior context (coherence,
       agent operability, mechanisms vs claims, security of what adopters copy, "would it make a difference"),
@@ -62,8 +62,10 @@ so; otherwise it is minor or major by the table above.
       Both found in 0.3.0 what the self-tests could not (ratchets loosened by hand, hooks wired twice, levels
       that disagreed).
 - [ ] The pilot (§7) ran this version for at least a week, with its `--check` output attached to the release PR.
-- [ ] `version` bumped in `.claude-plugin/plugin.json`, the template `templates/swarm.json`, and the examples in
-      `INTEGRATION.md`.
+- [ ] `version` bumped in `.claude-plugin/plugin.json`, the template `templates/swarm.json`, the examples in
+      `INTEGRATION.md` and the `README.md` Status line; `node scripts/check-version.mjs` (a CI step) fails while any
+      of them, or the first released `CHANGELOG.md` entry, disagrees. Leave `version` out of the marketplace entry:
+      `plugin.json` wins at install time and `claude plugin validate` warns when both set it.
 - [ ] `Unreleased` renamed to `[x.y.z] — <date>`; tag with `claude plugin tag .` (creates `swarm--vX.Y.Z` after
       checking that `plugin.json` and the marketplace entry agree); release notes = the changelog section.
 - [ ] Announcement to the teams: what changed, whether they must act, the update command (§4).

@@ -18,6 +18,29 @@ All notable changes to this project are documented here. The format follows
   human can `break` a zone with a logged reason. Self-tests in `reference/self-test/leases.test.ts`; the hook in
   `scripts/swarm-hook-pre-edit.test.mjs`.
 
+- **Version coherence check.** `scripts/check-version.mjs` (a `validate` CI step, with its self-test in
+  `scripts/check-version.test.mjs`) fails when `.claude-plugin/plugin.json`, `templates/swarm.json`, the first
+  released `CHANGELOG.md` entry, the `README.md` Status line or the `INTEGRATION.md` examples disagree. A project
+  does not need to act.
+
+- **The gate hook can ask or block (`hooks.gateEdit`).** `swarm.json` accepts `hooks.gateEdit`: `warn` (default,
+  today's behavior), `ask` (the person approves the edit) or `block` (the edit is denied with its reason) when an
+  agent edits a quality-gate file. The hook answers with the `PreToolUse` permission decision and still exits 0.
+  Self-test: `scripts/swarm-hook.test.mjs`. A project does not need to act; set `ask` or `block` to stop gate edits
+  before `land` instead of at `land`.
+
+- **Python, command by command (INTEGRATION.md §4).** A full mapping for Python projects that keep the Node
+  reference scripts: uv for setup and the lockfile, Ruff, pyright, pytest with pytest-cov and Hypothesis,
+  import-linter, the coverage.py → `coverage-summary.json` conversion the coverage ratchet reads, Ruff rules in place
+  of the `silentErrors` scanner, pip-audit over `uv export` as `deps.command`, the mutation smoke with pytest and
+  mutmut for scheduled runs. Documentation only.
+
+- **"Verify against your plan" (manual chapter 16 §0).** Scenarios B, D and E depend on the merge queue, branch
+  protection or rulesets and, with provenance, artifact attestations, whose availability depends on the GitHub
+  plan and on the repository being private. The manual now says to check it and gives the fallback for each missing
+  feature (serial local `land` with a person merging the verified branch; local guards labelled as `preference`; no
+  provenance claims). `skills/adopt/levels.md` and `reference/README.md` point to it. Documentation only.
+
 ### Changed
 
 - The plugin's `PreToolUse` (Edit/Write) hook runs `hooks.preEdit` from `swarm.json` after the quality-gate warning,
@@ -28,6 +51,19 @@ All notable changes to this project are documented here. The format follows
   renew --hook` after `wt wip`, and `leases check` as `hooks.preEdit`; `templates/claude/settings.no-plugin.json`
   wires the same. The `worktree` skill declares a plan with `claim` and treats a refused edit as a stop, never as
   something to route around. Chapter 01 explains shared leases and exclusive zones.
+- **Agents and evals pin full model IDs.** `agents/*.md` use `claude-opus-5-5` or `claude-sonnet-5-5` instead of the
+  `opus` / `sonnet` aliases, and the `evals` workflow defaults to `claude-sonnet-5-5`, as its own input description
+  asked. An alias moves when a model ships and differs by provider, so an eval regression could not be attributed.
+  Projects on a provider with different model IDs (Amazon Bedrock) copy the agent into `.claude/agents/` with their
+  ID (manual chapter 08).
+- The quality-gate hook and `hooks.preEdit` share the `PreToolUse` hook: a gate edit answered with `ask` or `deny`
+  (`hooks.gateEdit`) returns that decision alone; every other edit then runs `hooks.preEdit` as above.
+
+### Fixed
+
+- `README.md` Status said `v0.3` while the plugin was 0.4.0.
+- The gate hook's glob loop parses under bash 3.2 (macOS `/bin/sh`): a `case` inside `$(...)` uses the `(pattern)`
+  form, or the hook would fail with a syntax error and exit 2, refusing every edit.
 
 ### Migration
 

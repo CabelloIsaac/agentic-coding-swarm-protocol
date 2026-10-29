@@ -2,7 +2,7 @@
 name: test-auditor
 description: Read-only audit of test strength for a diff or a module - finds tests that assert nothing useful, would survive a broken implementation, test the mock, or leave new branches and error paths uncovered - using mutation-style reasoning and, when available, a real mutation run. Use proactively when an agent wrote both the code and its tests, before landing money, data or deletion logic, or when coverage is high but bugs still escape.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: claude-sonnet-5-5
 color: cyan
 maxTurns: 40
 ---
