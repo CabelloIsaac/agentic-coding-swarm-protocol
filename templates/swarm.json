@@ -13,11 +13,22 @@
     "newAdr": "docs/adr/draft-<slug>.md",
     "audit": "pnpm audit:repo",
     "ratchets": "node scripts/dev/ratchets.ts",
-    "findings": "node scripts/dev/findings.ts"
+    "findings": "node scripts/dev/findings.ts",
+    "leases": "node scripts/dev/leases.ts"
   },
   "hooks": {
-    "sessionStart": "node scripts/dev/wt.ts setup",
-    "stop": "node scripts/dev/wt.ts wip"
+    "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/leases.ts session",
+    "stop": "node scripts/dev/wt.ts wip; node scripts/dev/leases.ts renew --hook",
+    "preEdit": "node scripts/dev/leases.ts check"
+  },
+  "leases": {
+    "ttlMinutes": 30,
+    "exclusive": [
+      "**/migrations/**",
+      "*.sql",
+      "src/shared/types/**",
+      "src/**/contracts/**"
+    ]
   },
   "findings": {
     "file": "docs/audits/findings.jsonl",

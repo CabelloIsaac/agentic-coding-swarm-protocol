@@ -1,7 +1,8 @@
 #!/bin/sh
 # Swarm Protocol plugin hooks. Contract: INTEGRATION.md §3.
 # Usage: swarm-hook.sh session-start | stop | gate
-# A hook never blocks a session: every path exits 0.
+# A hook never blocks a session: every path exits 0, except one deliberate refusal: `hooks.preEdit` exiting 2 (a
+# lease on an exclusive zone held by another live session) is passed on, and Claude Code then refuses that edit.
 
 mode=$1
 root=${CLAUDE_PROJECT_DIR:-$(pwd)}
@@ -44,7 +45,8 @@ case "$mode" in
     fi
     ;;
   gate)
-    file=$(json .tool_input.file_path -)
+    input=$(cat)
+    file=$(printf '%s' "$input" | json .tool_input.file_path -)
     [ -z "$file" ] && exit 0
     patterns='*/vitest.config.*
 */jest.config.*
@@ -75,6 +77,15 @@ $extra"
           ;;
       esac
     done
+    # hooks.preEdit gets the hook JSON on stdin; its stdout (PreToolUse additionalContext) goes back to Claude Code.
+    # Only its exit 2 is passed on: any other failure must not block an edit.
+    if [ -f "$manifest" ]; then
+      cmd=$(json .hooks.preEdit "$manifest")
+      if [ -n "$cmd" ]; then
+        printf '%s' "$input" | (cd "$root" && sh -c "$cmd")
+        [ $? -eq 2 ] && exit 2
+      fi
+    fi
     ;;
 esac
 exit 0

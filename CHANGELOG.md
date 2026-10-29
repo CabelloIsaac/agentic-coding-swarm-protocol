@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Leases (`leases`).** Parallel sessions learned about each other only at `land`, when the second branch hit the
+  first one's change. `reference/scripts/leases.ts` keeps one reservation per session branch that expires on its own
+  (`ttlMinutes`, renewed by the `Stop` hook; a removed worktree holds nothing), so a dead session never blocks anyone.
+  Shared leases (every file a session touches) inform: the first time a session edits a file another live lease
+  covers, its agent is told who and why. Exclusive zones (`leases.exclusive`: migrations, schemas, contracts, shared
+  types) are held by the first live session that edits or claims them; another branch's edit there is refused with the
+  holder and its expiry. Zones are taken with `wx` and dead claims with an atomic rename, the list is read from the
+  integration branch (a branch cannot relax it), `land` releases the branch's leases after a green integration, and a
+  human can `break` a zone with a logged reason. Self-tests in `reference/self-test/leases.test.ts`; the hook in
+  `scripts/swarm-hook-pre-edit.test.mjs`.
+
+### Changed
+
+- The plugin's `PreToolUse` (Edit/Write) hook runs `hooks.preEdit` from `swarm.json` after the quality-gate warning,
+  with the hook JSON on stdin, and passes its stdout back. Its exit 2 is passed on and refuses the edit: the one
+  deliberate exception to "a hook always exits 0", documented in INTEGRATION.md §3. Any other failure is ignored. The
+  hook timeout goes from 5 to 10 seconds.
+- `templates/swarm.json` gains a `leases` block and `commands.leases`, runs `leases session` after `wt setup`, `leases
+  renew --hook` after `wt wip`, and `leases check` as `hooks.preEdit`; `templates/claude/settings.no-plugin.json`
+  wires the same. The `worktree` skill declares a plan with `claim` and treats a refused edit as a stop, never as
+  something to route around. Chapter 01 explains shared leases and exclusive zones.
+
+### Migration
+
+Nothing breaks: no conformance check changes, and without `hooks.preEdit` the PreToolUse hook behaves as before. To use
+it, copy `reference/scripts/leases.ts` to `scripts/dev/`, add the `leases` block (start with one or two exclusive
+zones), `commands.leases` and `hooks.preEdit`, and append the `session` and `renew --hook` calls to
+`hooks.sessionStart` and `hooks.stop`. `land.ts` releases leases after a green land; copy it too, or leases expire after
+`ttlMinutes`.
+
 ## [0.4.0] — 2026-10-28
 
 An independent code analysis of the reference project, run on the same day as the 0.3.1 audit, found that detection

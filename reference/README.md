@@ -28,6 +28,7 @@ log files verify writes would otherwise appear as "uncommitted change(s) appeare
 | `reference/scripts/git.ts` | `land` (lock, stale detection, fast-forward helpers) and `wt` (worktree parsing) |
 | `reference/scripts/review-receipt.ts` | Review gate — receipts keyed by patch id (`write`, `check`) |
 | `reference/scripts/wt.ts` | `wt` — worktree tooling |
+| `reference/scripts/leases.ts` | `leases` — shared leases and exclusive zones between session branches |
 | `reference/scripts/procs.ts` | Memory and process helpers |
 | `reference/scripts/adr.ts` | `adr` — conflict-free decision records |
 | `reference/scripts/roadmap.ts` | `roadmap` — derived status |
@@ -215,6 +216,36 @@ branch protection; the receipt is then the review approval on the pull request.
 
 **Live session** = an agent process whose cwd is inside the worktree, or a worktree lock whose recorded pid is alive.
 **A process belongs to the worktree that contains its cwd** (`lsof -d cwd -Fpn` on macOS, `/proc/<pid>/cwd` on Linux).
+
+## `leases` — reservations that expire
+
+Configuration: `leases.ttlMinutes` (default 30) and `leases.exclusive` (zone globs). The `leases` block of `swarm.json`
+on the integration branch (the published copy when there is one) wins over the config, as for `review`.
+
+- **Storage**, in git's common directory, never committed: `<project>-leases/branch-<branch>.json` (`{ branch,
+  worktree, paths, intent?, renewedAt, ttlMinutes }`), written only by its own branch with temp file + rename; and
+  `<project>-leases/zone-<sha256(zone)[:16]>.json` (`{ zone, branch, at }`), created with `open(…, 'wx')` so exactly
+  one branch gets a free zone.
+- **Alive** = renewed within its TTL and its worktree exists. A zone claim is alive while its holder's lease is.
+- **Takeover of a dead claim:** `rename` it aside (one winner), re-read what was moved; if it is a live claim that
+  changed hands in between, put it back with `link` (never overwrites) and report the holder. If even that races, the
+  displaced holder finds a claim that is not its own at its next edit and is refused there: a duplicate is reported,
+  never silent.
+- **`check`** (`hooks.preEdit`, PreToolUse on Edit/Write): reads the hook JSON on stdin and resolves the worktree from
+  `tool_input.file_path` (the nearest existing directory, so a new file in a new folder counts). Outside a linked
+  worktree, or for a file outside it: allow, silently. For each zone that covers the file: acquire or, if another live
+  branch holds it, print the reason on stderr and **exit 2**. Then add the file to the lease; the first time the branch
+  touches the file, list the other live leases that cover it as `additionalContext`.
+- **`claim <glob…> [--intent]`**: adds the globs to the lease and takes every zone they can reach (exact for a plain
+  path, judged on the tracked files when both are globs); exit 1 if a zone is held by another live branch.
+- **`renew [--hook]`** (`hooks.stop`): bumps `renewedAt` if the branch has a lease; with `--hook`, the worktree is the
+  hook JSON's `cwd`. Never creates a lease.
+- **`release`**, and `land` after a green integration: delete the branch's lease and its zone claims.
+- **`break <zone> --reason`**: deletes a zone claim held by a live session and appends `{ event: "break", zone, holder,
+  reason }` to `<project>-leases/log.jsonl`.
+- **`session`** (after `wt setup`): the zones and their live holders, and the other live leases.
+- **Exit codes:** `check` exits 2 only for a refusal; every hook-mode error exits 0, and a usage error exits 1, so a
+  misconfigured command never looks like a refusal.
 
 ## Memory and process helpers
 

@@ -2,16 +2,16 @@
 name: worktree
 description: Starts, checks and cleans up per-session git worktrees under the rule one session = one worktree = one branch. Use at the start of any task that will edit files, whenever you find yourself in the main checkout, when the session-start notice warns about memory, divergence or a .env, when asked about session or worktree status, stale worktrees or orphaned dev servers, and before deleting any branch or worktree.
 argument-hint: "[start <task> | status | clean]"
-allowed-tools: Bash(git rev-parse *) Bash(git branch *) Bash(git status *) Bash(git worktree list *) Bash(git check-ignore *) Bash(pnpm wt:status *) Bash(pnpm wt:gc --dry-run) Bash(pnpm wt:reap --dry-run) Bash(uptime)
+allowed-tools: Bash(git rev-parse *) Bash(git branch *) Bash(git status *) Bash(git worktree list *) Bash(git check-ignore *) Bash(pnpm wt:status *) Bash(pnpm wt:gc --dry-run) Bash(pnpm wt:reap --dry-run) Bash(node scripts/dev/leases.ts *) Bash(uptime)
 ---
 
 # worktree
 
 Say at the start: "Using worktree (<start|status|clean>)."
 
-**Resolve the commands first.** Read `swarm.json` at the repo root: `{status}`, `{commit}` and `{verifyQuick}` are its
-`commands.*` keys; fall back to `pnpm wt:status`, `pnpm wt:commit` and `pnpm verify --quick` only when the file or a
-key is missing. Contract: [INTEGRATION.md](../../INTEGRATION.md). The cleanup commands (`pnpm wt:gc`,
+**Resolve the commands first.** Read `swarm.json` at the repo root: `{status}`, `{commit}`, `{verifyQuick}` and
+`{leases}` are its `commands.*` keys; fall back to `pnpm wt:status`, `pnpm wt:commit`, `pnpm verify --quick` and
+`node scripts/dev/leases.ts` only when the file or a key is missing. Contract: [INTEGRATION.md](../../INTEGRATION.md). The cleanup commands (`pnpm wt:gc`,
 `pnpm wt:reap`, `pnpm wt:archive`) belong to the reference tooling of level 2; if the repo does not have them, use
 the plain-git path at the end.
 
@@ -48,13 +48,17 @@ git branch --show-current                  # empty → detached HEAD
    | divergence from the remote | tell the human; do not pull or merge (single-publisher rule) |
    | last audit older than 14 days | mention it once; the `audit-repo` skill runs it |
    | too many dev servers or one above 3 GB | stop yours when you are done looking at it |
+   | `leases ·` exclusive zones held by others, other sessions' leases | plan around them; if the task needs a held zone, tell the human now, not after half the work |
 
-3. **Baseline.** Run `{verifyQuick}` before your first edit. Red already → report what was red before you started;
+3. **Declare.** Once you have a plan, `{leases} claim "<glob>" … --intent "<one line>"`. A `✗` means an exclusive
+   zone is held by a live session: do the parts that do not need it, or ask the human. A refused edit later (`swarm
+   lease: … held by …`) means the same; never work around it (another path, a copy, a shell write).
+4. **Baseline.** Run `{verifyQuick}` before your first edit. Red already → report what was red before you started;
    do not fix unrelated failures silently.
-4. Use the ports in `.claude/worktree.env` for dev servers, so parallel sessions do not collide.
-5. Commit with `{commit} "<message>"`. The `Stop` hook keeps at most one rolling `wip:` commit so nothing is lost;
+5. Use the ports in `.claude/worktree.env` for dev servers, so parallel sessions do not collide.
+6. Commit with `{commit} "<message>"`. The `Stop` hook keeps at most one rolling `wip:` commit so nothing is lost;
    `{commit}` absorbs it.
-6. Finish with the `land` skill. The worktree stays after a land; the next `land` or session start collects it.
+7. Finish with the `land` skill; it releases your leases. The worktree stays after a land; the next `land` or session start collects it.
 
 ## status
 
