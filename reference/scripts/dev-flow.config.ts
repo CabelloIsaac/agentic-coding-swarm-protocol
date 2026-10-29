@@ -188,6 +188,11 @@ export interface Config {
    * of `swarm.json` on the integration branch, when present, wins (like `review`).
    */
   leases?: Partial<{ ttlMinutes: number; exclusive: string[] }>;
+  /**
+   * Early overlap detection (`overlap.ts`): minimum minutes between two checks of the PostToolUse notice (each check
+   * runs `git merge-tree` against the other active branches) and how many files a line lists before "and N more".
+   */
+  overlap?: Partial<{ notifyEveryMinutes: number; listFiles: number }>;
 
   /** Sandbox folder for throw-away experiments; nothing in the product may import from it. */
   playgroundDir: string;
@@ -327,6 +332,7 @@ const defaults: Config = {
 
   // Exclusive zones: contracts and schemas whose change invalidates other sessions' work. Keep the list short.
   leases: { ttlMinutes: 30, exclusive: ['**/migrations/**', '*.sql', 'src/shared/types/**', 'src/**/contracts/**'] },
+  overlap: { notifyEveryMinutes: 5, listFiles: 5 },
 
   playgroundDir: 'playground',
 

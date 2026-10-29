@@ -26,13 +26,15 @@ agent runs (verify, land, commit, hooks) is resolved from that file, never guess
     "audit": "pnpm audit:repo",
     "ratchets": "node scripts/dev/ratchets.ts",
     "findings": "node scripts/dev/findings.ts",
-    "leases": "node scripts/dev/leases.ts"
+    "leases": "node scripts/dev/leases.ts",
+    "overlap": "node scripts/dev/overlap.ts"
   },
   "findings": { "file": "docs/audits/findings.jsonl", "sla": { "high": 2, "medium": 14, "low": 60 }, "closureEvery": 3 },
   "hooks": {
-    "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/leases.ts session",
+    "sessionStart": "node scripts/dev/wt.ts setup; node scripts/dev/leases.ts session; node scripts/dev/overlap.ts --session",
     "stop": "node scripts/dev/wt.ts wip; node scripts/dev/leases.ts renew --hook",
     "preEdit": "node scripts/dev/leases.ts check",
+    "postEdit": "node scripts/dev/overlap.ts --notify",
     "gateEdit": "warn"
   },
   "leases": { "ttlMinutes": 30, "exclusive": ["**/migrations/**", "*.sql", "src/shared/types/**"] },
@@ -56,6 +58,8 @@ after the conformance checks for that level pass (§6).
 | `hooks.sessionStart`, `hooks.stop` | level 2 | Run by the plugin hooks (§3). Optional for teams whose agents have no hooks; then §5 applies. |
 | `hooks.preEdit` | optional (recommended from level 2) | Run by the plugin's `PreToolUse` hook before an Edit or Write, with the hook JSON on stdin. Its stdout goes back to Claude Code; its exit 2 refuses the edit (the only hook allowed to block, §3). The template runs `leases check`. |
 | `commands.leases`, `leases` | optional (recommended from level 2) | The leases CLI (default `node scripts/dev/leases.ts`) and `{ ttlMinutes, exclusive }`: minutes without a renewal before a lease is dead (default 30) and the exclusive zone globs. Read from the integration branch, so a branch cannot relax them. |
+| `hooks.postEdit` | optional (recommended from level 2) | Run by the plugin's `PostToolUse` hook after an Edit or Write, with the hook JSON on stdin; its stdout goes back to Claude Code. The template runs `overlap --notify`. |
+| `commands.overlap` | optional (recommended from level 2) | Early overlap detection between session branches (§2). Default `node scripts/dev/overlap.ts`. |
 | `commands.newAdr` | level 2 | A command, or a path pattern for draft ADRs. |
 | `commands.audit` | level 3 | Offline debt metrics. |
 | `commands.ratchets` | required from level 1 (L1.6) | Checks `quality-ratchets.json`; with `--tighten`, rewrites it to the current values, only tightening. Default `node scripts/dev/ratchets.ts`. |
@@ -113,9 +117,11 @@ The names are free; the behaviour is the contract. Every guarantee below is some
 | `deps-audit` | Run the stack's dependency audit as JSON (`deps.command`), normalise it, and exit 1 on any advisory at a `deps.failOn` severity (default critical, high) that `deps-allowlist.json` does not list with a reason, an owner and an unexpired date; an expired entry fails again; an advisory with no severity counts as high. Serial, last step of the full tier and a CI step. | Pass when the audit printed no JSON (network down counts as a failure, not a pass). |
 | `mutation-smoke` | For each changed source file with related tests, apply a few mutations (`>=`/`<=`, `===`, `&&`/`||`, early `return`) one at a time and run those tests; restore the original on every exit path. Report each file whose mutants all survive and each changed file with no related test as "not proven". `mode: warn` reports; `mode: fail` exits 1. | Leave a mutated file on disk; claim a red baseline as a kill. |
 | `leases` | Keep one lease per session branch that expires after `ttlMinutes` without a renewal or when its worktree is gone. `check`: take the exclusive zone that covers the edited file, or refuse with exit 2 and the holder when another live branch holds it; add the file to the lease; tell the agent once which other live leases cover it. `claim`, `renew`, `release` (also run by `land` after a green integration), `break --reason` (logged), `session`, `list`. | Block for any reason other than a zone held by another live branch; let an expired or orphaned lease hold anything; refuse with any exit code but 2. |
+| `overlap` | List the active session branches (linked worktrees with commits not in the integration branch or uncommitted changes) and report, for the current branch by default or every pair with `--all`: files two branches both touch, the files `git merge-tree` predicts will conflict, and files the integration branch changed since the branch's merge base that the branch also touches. `--strict` exits 1 on a predicted conflict. | Commit, rebase, fetch, block, or report a pair as conflict-free when git could not predict it. |
 | `hooks.sessionStart` | Prepare a session (deps, ports, warnings) and exit 0 even on error. | Block the session or print more than a few actionable lines. |
 | `hooks.stop` | Keep at most one rolling `wip:` commit when the tree is dirty, outside the main checkout. | Commit in the main checkout, during a rebase or merge, or while a `land` of its branch is running. |
 | `hooks.preEdit` | Exit 0 and print nothing or one `PreToolUse` JSON with `additionalContext`; exit 2 with the reason on stderr only for a deliberate refusal. | Exit 2 on its own errors. |
+| `hooks.postEdit` | Exit 0 always. Print nothing, or one `PostToolUse` JSON with `hookSpecificOutput.additionalContext`; speak only when there is something new for the agent. | Block, or repeat the same notice on every edit. |
 
 **Domain contract validators are a first-class category of the gate**, next to lint, types and tests: the
 project's own data (tool or plugin registries, tenant configuration, specs, fixtures) checked against its schemas
@@ -127,11 +133,14 @@ in `reference/scripts/`.
 
 ## 3. Plugin hooks
 
-The plugin ships three hooks, all implemented by [hooks/swarm-hook.sh](hooks/swarm-hook.sh), all exit 0 always but
+The plugin ships four hooks, all implemented by [hooks/swarm-hook.sh](hooks/swarm-hook.sh), all exit 0 always but
 for one deliberate refusal:
 
 - **SessionStart** runs `hooks.sessionStart` from `swarm.json`.
 - **Stop** runs `hooks.stop`.
+- **PostToolUse (Edit/Write)** runs `hooks.postEdit` with the hook JSON on stdin and passes its stdout back, so the
+  command can add `additionalContext` for the agent (the template: an early overlap notice). Because it runs in the
+  project root, the command finds the session's worktree from `tool_input.file_path`.
 - **PreToolUse (Edit/Write)** reacts when a file matching a quality-gate glob is edited (the defaults plus `gates`
   from `swarm.json`), as `hooks.gateEdit` says. `warn`, the default, prints a message and lets the edit through, so
   the gate is only stopped at `land` and review. `ask` and `block` answer with the `PreToolUse` permission decision
@@ -214,6 +223,7 @@ through files: they read `AGENTS.md`, and the project's `AGENTS.md` (template:
 2. **Iterate:** `verifyQuick` after each meaningful change. With `commands.leases`, run `claim <globs> --intent
    "<why>"` before editing and `renew` before you stop: without hooks nothing does it for you, and an exclusive zone
    is respected only if you check it (`list`).
+   Run `commands.overlap` (if present) every few commits: there is no `PostToolUse` notice without the hook.
 3. **Before stopping, every time:** commit (there is no `wip:` safety net without the Stop hook), with
    `Assumption: <what> — <why>` trailers for decisions taken without asking.
 4. **Finish:** full `verify`, an independent review (the prompts in `agents/` work as plain system prompts), then

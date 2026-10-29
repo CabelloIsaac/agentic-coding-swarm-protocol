@@ -13,6 +13,8 @@ Agents with Claude Code hooks get steps 1 and 3 automatically. Everyone else doe
 2. **Iterate** with `commands.verifyQuick`. It never closes a task. If `commands.leases` exists, `claim` the paths
    you will touch before editing (`--intent "<why>"`), check `list` for exclusive zones held by others, and `renew`
    before you stop: there are no hooks to do it for you.
+   Every few commits, run `commands.overlap` (if present): another session touching your files is cheaper to find
+   now than at land.
 3. **Before you stop, every time, commit.** There is no automatic `wip:` commit without hooks. Record each decision
    taken without asking as a trailer: `Assumption: <what> — <why>`.
 4. **Finish** with `commands.verify` (the same as CI) and show its output. Ask for an independent review of the

@@ -41,6 +41,16 @@ All notable changes to this project are documented here. The format follows
   feature (serial local `land` with a person merging the verified branch; local guards labelled as `preference`; no
   provenance claims). `skills/adopt/levels.md` and `reference/README.md` point to it. Documentation only.
 
+- **Early overlap detection (`overlap`).** Worktrees isolate files, not work: two sessions can make incompatible
+  changes, both stay green, and the collision only appears at the second `land`, after both spent their tokens and a
+  full verify. `reference/scripts/overlap.ts` reports, read-only, which active session branches touch the same files,
+  which pairs `git merge-tree --write-tree` predicts will conflict, and which branches the integration branch moved
+  under (files it changed that the branch also touches, with the rebase conflict predicted). It runs after `wt setup`
+  (`--session`: the other live sessions and their areas), after edits through a new `PostToolUse` plugin hook
+  (`--notify`: throttled, and only when the overlap changed, as `additionalContext`), and on demand (`--all`,
+  `--json`, `--strict`). Self-tests in `reference/self-test/overlap.test.ts`; the hook in
+  `scripts/swarm-hook-post-edit.test.mjs`.
+
 ### Changed
 
 - The plugin's `PreToolUse` (Edit/Write) hook runs `hooks.preEdit` from `swarm.json` after the quality-gate warning,
@@ -58,6 +68,11 @@ All notable changes to this project are documented here. The format follows
   ID (manual chapter 08).
 - The quality-gate hook and `hooks.preEdit` share the `PreToolUse` hook: a gate edit answered with `ask` or `deny`
   (`hooks.gateEdit`) returns that decision alone; every other edit then runs `hooks.preEdit` as above.
+- The plugin ships a fourth hook, `PostToolUse` on Edit/Write, which runs `hooks.postEdit` from `swarm.json` with the
+  hook JSON on stdin and returns its stdout (INTEGRATION.md §1–§3). Still exit 0 always; a no-op without the key.
+- `templates/swarm.json` and `templates/claude/settings.no-plugin.json` wire `overlap --session` after `wt setup` and
+  `overlap --notify` as `hooks.postEdit`; `commands.overlap` is a new optional key. The `worktree` skill reads the
+  notices; chapter 01 explains the three findings and what they cannot see.
 
 ### Fixed
 
@@ -67,11 +82,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Migration
 
-Nothing breaks: no conformance check changes, and without `hooks.preEdit` the PreToolUse hook behaves as before. To use
-it, copy `reference/scripts/leases.ts` to `scripts/dev/`, add the `leases` block (start with one or two exclusive
+Nothing breaks: no conformance check changes, and without `hooks.preEdit`, `hooks.postEdit` or `hooks.gateEdit` the
+hooks behave as before. **Leases:** copy `reference/scripts/leases.ts` to `scripts/dev/`, add the `leases` block (start with one or two exclusive
 zones), `commands.leases` and `hooks.preEdit`, and append the `session` and `renew --hook` calls to
 `hooks.sessionStart` and `hooks.stop`. `land.ts` releases leases after a green land; copy it too, or leases expire after
 `ttlMinutes`.
+
+**Overlap:** copy `reference/scripts/overlap.ts` to `scripts/dev/`, add
+`commands.overlap` and `hooks.postEdit`, and append `; node scripts/dev/overlap.ts --session` to `hooks.sessionStart`.
+Conflict prediction needs git 2.38 or later; with an older git it reports shared files only and says so.
 
 ## [0.4.0] — 2026-10-28
 

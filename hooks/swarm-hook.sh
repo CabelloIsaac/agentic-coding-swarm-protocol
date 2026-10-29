@@ -1,6 +1,6 @@
 #!/bin/sh
 # Swarm Protocol plugin hooks. Contract: INTEGRATION.md §3.
-# Usage: swarm-hook.sh session-start | stop | gate
+# Usage: swarm-hook.sh session-start | stop | gate | post-edit
 # A hook never blocks a session: every path exits 0, with two deliberate exceptions. The gate hook may deny or ask
 # for one edit, through the PreToolUse JSON decision on stdout, when swarm.json sets hooks.gateEdit to "block" or
 # "ask" (default "warn"); and `hooks.preEdit` exiting 2 (a lease on an exclusive zone held by another live session)
@@ -43,6 +43,14 @@ case "$mode" in
     if [ "$mode" = stop ]; then key=.hooks.stop; fi
     if [ -f "$manifest" ]; then
       cmd=$(json "$key" "$manifest")
+      [ -n "$cmd" ] && (cd "$root" && sh -c "$cmd")
+    fi
+    ;;
+  post-edit)
+    # The hook's JSON reaches the command on stdin (the edited file is tool_input.file_path); whatever the command prints
+    # (a PostToolUse `additionalContext` JSON, or nothing) goes back to Claude Code. Its exit status is ignored.
+    if [ -f "$manifest" ]; then
+      cmd=$(json .hooks.postEdit "$manifest")
       [ -n "$cmd" ] && (cd "$root" && sh -c "$cmd")
     fi
     ;;
